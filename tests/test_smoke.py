@@ -30,6 +30,7 @@ def test_cli_help_via_runner() -> None:
     assert "search" in result.stdout
     assert "chat" in result.stdout
     assert "intake" in result.stdout
+    assert "generate" in result.stdout
 
 
 def test_cli_help_via_entrypoint() -> None:
@@ -235,3 +236,67 @@ def test_cli_intake_auto_writes_requirements_and_strict_exits(
     md_content = (out_dir / "requirements.md").read_text(encoding="utf-8")
     assert "## Groundability Report" in md_content
     assert "Auto-assumed (Q1:" in md_content
+
+
+def test_cli_generate_writes_definition_and_log(tmp_path: Path, monkeypatch) -> None:
+    """Verify `forge generate` writes definition.yaml + generation_log.json."""
+    req_path = tmp_path / "requirements.json"
+    req_doc = {
+        "brief": "Answer hydrophone deployment depth.",
+        "scope": "Hydrophone deployment depth only.",
+        "audience": "Field technicians",
+        "tone": "Concise",
+        "must_answer_topics": [
+            {
+                "id": "REQ-001",
+                "title": "Deployment Depth",
+                "description": "Hydrophone pod depth",
+                "priority": "high",
+            }
+        ],
+        "must_refuse_topics": [],
+        "assumptions": [],
+        "capabilities_needed": [],
+        "clarifying_qa": [],
+    }
+    req_path.write_text(json.dumps(req_doc), encoding="utf-8")
+
+    fake_llm = FakeLLM(
+        responses=[
+            json.dumps({"proposed_tools": []}),
+            json.dumps({"role": "You are a sensor guide assistant."}),
+            json.dumps({"scope": "Answer hydrophone deployment questions."}),
+            json.dumps({"audience_tone": "Concise for field technicians."}),
+            json.dumps({"grounding_rules": "Cite quoted evidence verbatim."}),
+            json.dumps({"refusal_policy": "Say the documents don't cover out-of-scope asks."}),
+            json.dumps({"format_rules": "Follow output contract JSON."}),
+            json.dumps({"extra_rules": ["Keep units exact."]}),
+        ]
+    )
+    monkeypatch.setattr(
+        forge_cli.LLMClient,
+        "from_config",
+        classmethod(lambda cls, *args, **kwargs: fake_llm),
+    )
+
+    out_dir = tmp_path / "gen_out"
+    runner = CliRunner()
+    res = runner.invoke(
+        app,
+        [
+            "generate",
+            "--requirements",
+            str(req_path),
+            "--docs",
+            str(DOCS_DIR),
+            "--out",
+            str(out_dir),
+            "--bm25-only",
+            "--no-smoke",
+        ],
+    )
+    assert res.exit_code == 0
+    assert (out_dir / "definition.yaml").is_file()
+    assert (out_dir / "generation_log.json").is_file()
+    loaded_def = AgentDefinition.load_yaml(out_dir / "definition.yaml")
+    assert loaded_def.attached_tool_names() == []
