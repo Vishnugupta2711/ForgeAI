@@ -55,3 +55,14 @@
   - Tests in `tests/test_intake_groundability.py` and `tests/test_smoke.py`
 - **Verification**:
   - `pytest -q`, `ruff check .`, and `forge intake` CLI tests passed cleanly.
+
+### Phase 4 — Agent Generator (`phase-4-generator`)
+- **Status**: Complete
+- **Deliverables**:
+  - `forge.generator.heuristics`: `derive_retrieval_settings()` computing `chunk_size`, `overlap`, `top_k`, `hybrid_alpha`, `rerank`, `query_rewrite`, and `min_score` from `CorpusProfile` stats (`loaded_docs`, `avg_section_len`, `tabular_share`, `language_profile`) with logged rationale
+  - `forge.generator.tool_gate`: deterministic `gate_tools()` attaching only tools backed by active `REQ-xxx` capabilities and supported by corpus/brief (e.g. tabular doc for `csv_lookup`, explicit live external need for `http_api`), logging every accepted/rejected candidate in `generation_log.json`
+  - `forge.generator.synthesizer`: `AgentGenerator` generating each `SystemPromptSections` field via dedicated `prompts/generate_*.v1.md` templates, enforcing quoted-evidence grounding and honest refusal of gaps/exclusions, building output contract, recording prompt hashes, and running a 3-question `AgentRuntime` smoke test
+  - CLI command `forge generate --requirements ... --docs ... --out ...`
+  - Tests in `tests/test_generator.py` (8-case tool-selection matrix, heuristics, determinism/cache, smoke run) and `tests/test_smoke.py`
+- **Verification**:
+  - `pytest -q`, `ruff check .`, and `forge generate` CLI checks passed cleanly.

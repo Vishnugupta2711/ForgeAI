@@ -15,6 +15,7 @@ from forge import __version__
 from forge.agent.runtime import AgentRuntime
 from forge.agent.schema import AgentDefinition, AnswerRecord
 from forge.config import load_config
+from forge.generator import AgentGenerator, GenerationLog
 from forge.groundability import GroundabilityGuard, StrictGroundabilityError
 from forge.ingest.profile import ingest_folder
 from forge.intake import IntakeInterviewer, RequirementsDocument
@@ -502,6 +503,113 @@ def intake(
             console.print("[yellow]Flagged groundability gaps:[/yellow]")
             for gap in rep.flagged_gaps:
                 console.print(f"  - {gap}")
+
+
+def _run_generate_pipeline(
+    *,
+    requirements_path: Path,
+    docs: Path,
+    out_dir: Path,
+    agent_name: str | None,
+    bm25_only: bool,
+    run_smoke: bool,
+    llm_client: LLMClient | None = None,
+) -> tuple[AgentDefinition, GenerationLog]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    cfg = load_config()
+    client = llm_client or LLMClient.from_config(cfg, usage_log_path=out_dir / "usage.jsonl")
+    requirements = RequirementsDocument.model_validate_json(
+        requirements_path.read_text(encoding="utf-8")
+    )
+
+    ingest_res, chunks, profile = ingest_folder(docs)
+    (out_dir / "profile.json").write_text(profile.model_dump_json(indent=2), encoding="utf-8")
+
+    index_dir = out_dir / "index"
+    index: HybridIndex | None = None
+    if (index_dir / "meta.json").is_file():
+        index = HybridIndex.load(index_dir)
+
+    if index is None:
+        if bm25_only:
+            index = HybridIndex.build(chunks, llm_client=None)
+        else:
+            try:
+                index = HybridIndex.build(chunks, llm_client=client)
+            except LLMProviderError as exc:
+                console.print(
+                    f"[yellow]Embedding provider unavailable ({exc}); "
+                    "building BM25-only index.[/yellow]"
+                )
+                index = HybridIndex.build(chunks, llm_client=None)
+        index.save(index_dir)
+
+    generator = AgentGenerator(client, config=cfg)
+    return generator.generate(
+        requirements,
+        profile,
+        index,
+        documents=ingest_res.documents,
+        agent_name=agent_name,
+        out_dir=out_dir,
+        run_smoke_test=run_smoke,
+    )
+
+
+@app.command()
+def generate(
+    requirements: Annotated[
+        Path,
+        typer.Option(
+            "--requirements",
+            exists=True,
+            dir_okay=False,
+            help="Path to requirements.json produced by forge intake.",
+        ),
+    ],
+    docs: Annotated[
+        Path,
+        typer.Option("--docs", exists=True, file_okay=False, help="Document folder."),
+    ],
+    out: Annotated[
+        Path,
+        typer.Option("--out", help="Output directory for definition.yaml and generation_log.json."),
+    ] = Path("runs/generated"),
+    name: Annotated[
+        str | None,
+        typer.Option("--name", help="Optional override for generated agent name."),
+    ] = None,
+    bm25_only: Annotated[
+        bool,
+        typer.Option("--bm25-only", help="Build index without dense embedding calls."),
+    ] = False,
+    no_smoke: Annotated[
+        bool,
+        typer.Option("--no-smoke", help="Skip post-generation 3-question smoke test."),
+    ] = False,
+) -> None:
+    """Generate definition.yaml and generation_log.json from requirements and docs."""
+    definition, gen_log = _run_generate_pipeline(
+        requirements_path=requirements,
+        docs=docs,
+        out_dir=out,
+        agent_name=name,
+        bm25_only=bm25_only,
+        run_smoke=not no_smoke,
+    )
+    attached = definition.attached_tool_names()
+    console.print(
+        Panel(
+            f"Agent: {definition.meta.name}\n"
+            f"Tools attached: {attached or ['none']}\n"
+            f"Retrieval: chunk_size={definition.retrieval.chunk_size}, "
+            f"overlap={definition.retrieval.overlap}, top_k={definition.retrieval.top_k}, "
+            f"alpha={definition.retrieval.hybrid_alpha}\n"
+            f"Smoke tests run: {len(gen_log.smoke_test_results)}",
+            title=f"Generated Definition -> {out / 'definition.yaml'}",
+            title_align="left",
+        )
+    )
 
 
 if __name__ == "__main__":
