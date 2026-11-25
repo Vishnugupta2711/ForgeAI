@@ -34,3 +34,14 @@
   - Fixtures in `fixtures/phase1_sample/` and tests in `tests/test_llm.py`, `tests/test_ingest.py`, `tests/test_retrieval.py`, and `tests/test_smoke.py`
 - **Verification**:
   - `pytest -q`, `ruff check .`, `forge ingest`, and `forge search` passed cleanly.
+
+### Phase 2 — Agent Schema, Tools & Generic Runtime (`phase-2-agent-runtime`)
+- **Status**: Complete
+- **Deliverables**:
+  - `forge.agent.schema`: `AgentDefinition` (YAML serialization, named `SystemPromptSections`, retrieval config, justified tools, validated `OutputContractConfig`, model settings) and `AnswerRecord`
+  - `forge.tools`: `ToolRegistry` with `csv_lookup` (filter/select/sort/limit, no `eval`/`exec`), `calculator` (AST-safe arithmetic), `http_api` (Open-Meteo host allowlist, timeouts, cache, offline fixture mode), and `current_date`
+  - `forge.agent.runtime`: generic `AgentRuntime` with optional query rewrite, hybrid retrieval + `min_score` gate, bounded JSON action tool loop (`max_tool_calls=3`), unattached-tool rejection, and output-contract repair-retry + versioned prompts under `prompts/`
+  - `forge chat <definition.yaml> --docs <folder>` multi-turn CLI runner with `--trace`
+  - `fixtures/hand_agent.yaml` and `fixtures/docs/` plus unit/CLI tests in `tests/test_agent_schema.py`, `tests/test_tools.py`, `tests/test_agent_runtime.py`, and `tests/test_smoke.py`
+- **Verification**:
+  - `pytest -q`, `ruff check .`, and `forge chat` end-to-end checks passed cleanly.

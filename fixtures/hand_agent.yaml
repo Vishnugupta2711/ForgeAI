@@ -1,0 +1,85 @@
+meta:
+  name: marine-sensor-assistant
+  brief: Answer technical questions about acoustic arrays, weather buoys, field protocols, and sensor inventory from the supplied documentation.
+  version: 1.0.0
+  provenance:
+    model_names:
+      agent: qwen2.5:3b-instruct
+      embed: nomic-embed-text
+    prompt_hashes:
+      hand_authored: v1
+    generator_version: hand-baseline-1.0
+
+system_prompt:
+  role: You are a technical documentation assistant for field sensor deployments and maintenance.
+  scope: Answer ONLY using the provided document excerpts and attached tools (csv_lookup and calculator). Do not use outside knowledge.
+  audience_tone: Concise, precise, engineering-focused tone with exact numbers and units.
+  grounding_rules: Every factual claim must be supported by a verbatim quote in citations from the retrieved context or tool output.
+  refusal_policy: If the question asks about topics not present in the documents (such as personnel salaries, unrelated legal topics, or live external forecasts), set refused=true and explain what is missing.
+  format_rules: Follow the output contract JSON schema strictly with answer, citations, refused, refusal_reason, and confidence.
+  extra_rules:
+    - Never cite a doc_id or chunk_id that was not present in the retrieved context.
+    - Prefer csv_lookup for filtering or counting rows in sensors.csv.
+
+retrieval:
+  chunk_size: 400
+  overlap: 40
+  top_k: 4
+  hybrid_alpha: 0.5
+  rerank: false
+  query_rewrite: false
+  min_score: null
+
+tools:
+  - name: csv_lookup
+    config: {}
+    justification_requirement_id: REQ-CSV-INVENTORY
+  - name: calculator
+    config: {}
+    justification_requirement_id: REQ-NUMERIC-COMPUTATION
+
+output_contract:
+  json_schema:
+    type: object
+    required:
+      - answer
+      - citations
+      - refused
+      - refusal_reason
+      - confidence
+    properties:
+      answer:
+        type: string
+      citations:
+        type: array
+        items:
+          type: object
+          required:
+            - doc_id
+            - chunk_id
+            - quote
+          properties:
+            doc_id:
+              type: string
+            chunk_id:
+              type: string
+            quote:
+              type: string
+      refused:
+        type: boolean
+      refusal_reason:
+        type:
+          - string
+          - "null"
+      confidence:
+        type: number
+        minimum: 0.0
+        maximum: 1.0
+
+model:
+  provider: ollama
+  name: qwen2.5:3b-instruct
+  embed_model: nomic-embed-text
+  temperature: 0.0
+  seed: 42
+  max_tool_calls: 3

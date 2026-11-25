@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Annotated
 
@@ -11,12 +12,15 @@ from rich.panel import Panel
 from rich.table import Table
 
 from forge import __version__
+from forge.agent.runtime import AgentRuntime
+from forge.agent.schema import AgentDefinition, AnswerRecord
 from forge.config import load_config
 from forge.ingest.profile import ingest_folder
 from forge.llm.client import LLMClient
 from forge.llm.models import LLMProviderError
 from forge.retrieval.hybrid import HybridIndex, HybridRetriever
 from forge.retrieval.models import RetrievalConfig
+from forge.tools import ToolContext
 
 app = typer.Typer(
     name="forge",
@@ -145,8 +149,8 @@ def search(
     """Ingest/load a folder index and print ranked chunks with RRF scores."""
     cfg = load_config()
     usage_log = (run_dir / "usage.jsonl") if run_dir is not None else None
-    llm_client: LLMClient | None = None if bm25_only else LLMClient.from_config(
-        cfg, usage_log_path=usage_log
+    llm_client: LLMClient | None = (
+        None if bm25_only else LLMClient.from_config(cfg, usage_log_path=usage_log)
     )
 
     index_dir = (run_dir / "index") if run_dir is not None else None
@@ -208,6 +212,166 @@ def search(
         )
         snippet = hit.chunk.text if len(hit.chunk.text) <= 400 else hit.chunk.text[:397] + "..."
         console.print(Panel(snippet, title=header, title_align="left"))
+
+
+def _render_answer_record(record: AnswerRecord, *, show_trace: bool) -> None:
+    out = record.output
+    status = "[red]REFUSED[/red]" if out.refused else "[green]ANSWERED[/green]"
+    title = f"{status} | confidence={out.confidence:.2f} | model={record.model}"
+    body = out.answer
+    if out.refused and out.refusal_reason:
+        body = f"{out.answer}\n\n[dim]Refusal reason: {out.refusal_reason}[/dim]"
+    console.print(Panel(body, title=title, title_align="left"))
+
+    if out.citations:
+        cit_table = Table(title="Citations")
+        cit_table.add_column("Doc ID", style="cyan")
+        cit_table.add_column("Chunk ID")
+        cit_table.add_column("Quote")
+        for cit in out.citations:
+            cit_table.add_row(cit.doc_id, cit.chunk_id, cit.quote)
+        console.print(cit_table)
+
+    if show_trace:
+        console.print("[bold]Trace:[/bold]")
+        console.print(f"  effective_query: {record.effective_query}")
+        if record.retrieved_chunks:
+            console.print("  retrieved_chunks:")
+            for rc in record.retrieved_chunks:
+                console.print(
+                    f"    - {rc.chunk_id} ({rc.doc_id}) score={rc.score:.4f} "
+                    f"section={rc.section_heading or '-'}"
+                )
+        if record.tool_calls:
+            console.print("  tool_calls:")
+            for tc in record.tool_calls:
+                console.print(
+                    f"    - step={tc.step} {tc.tool_name}({tc.arguments}) "
+                    f"ok={tc.ok} error={tc.error or '-'}"
+                )
+        for line in record.trace:
+            console.print(f"  * {line}")
+
+
+def _build_runtime_for_chat(
+    definition: AgentDefinition,
+    docs: Path,
+    *,
+    run_dir: Path | None,
+    bm25_only: bool,
+    llm_client: LLMClient | None = None,
+) -> AgentRuntime:
+    cfg = load_config().model_copy(deep=True)
+    cfg.endpoints.provider = definition.model.provider
+    cfg.models.agent = definition.model.name
+    cfg.models.embed = definition.model.embed_model
+    cfg.generation.temperature = definition.model.temperature
+    cfg.generation.seed = definition.model.seed
+
+    usage_log = (run_dir / "usage.jsonl") if run_dir is not None else None
+    client = llm_client or LLMClient.from_config(cfg, usage_log_path=usage_log)
+
+    ingest_res, chunks, _ = ingest_folder(
+        docs,
+        chunk_size=definition.retrieval.chunk_size,
+        overlap=definition.retrieval.overlap,
+    )
+
+    index_dir = (run_dir / "index") if run_dir is not None else None
+    index: HybridIndex | None = None
+    if index_dir is not None and (index_dir / "meta.json").is_file():
+        index = HybridIndex.load(index_dir)
+
+    if index is None:
+        if bm25_only:
+            index = HybridIndex.build(chunks, llm_client=None)
+        else:
+            try:
+                index = HybridIndex.build(
+                    chunks,
+                    llm_client=client,
+                    embed_model=definition.model.embed_model,
+                )
+            except LLMProviderError as exc:
+                console.print(
+                    f"[yellow]Embedding provider unavailable ({exc}); "
+                    "building BM25-only index.[/yellow]"
+                )
+                index = HybridIndex.build(chunks, llm_client=None)
+        if index_dir is not None:
+            index.save(index_dir)
+
+    tool_cache_dir = (run_dir / "tool_cache") if run_dir is not None else None
+    tool_ctx = ToolContext.from_documents(ingest_res.documents, cache_dir=tool_cache_dir)
+    return AgentRuntime(definition, index, llm_client=client, tool_context=tool_ctx, config=cfg)
+
+
+@app.command()
+def chat(
+    definition_path: Annotated[
+        Path,
+        typer.Argument(exists=True, dir_okay=False, help="Path to agent definition YAML."),
+    ],
+    docs: Annotated[
+        Path,
+        typer.Option("--docs", exists=True, file_okay=False, help="Document folder."),
+    ],
+    trace: Annotated[
+        bool, typer.Option("--trace", help="Display retrieval and tool execution trace.")
+    ] = False,
+    question: Annotated[
+        str | None,
+        typer.Option("--question", "-q", help="Run a single question non-interactively."),
+    ] = None,
+    run_dir: Annotated[
+        Path | None,
+        typer.Option("--run-dir", help="Optional run directory for index/usage logs."),
+    ] = None,
+    bm25_only: Annotated[
+        bool,
+        typer.Option("--bm25-only", help="Build index without dense embedding calls."),
+    ] = False,
+) -> None:
+    """Run an interactive multi-turn chat session using any declarative AgentDefinition."""
+    definition = AgentDefinition.load_yaml(definition_path)
+    runtime = _build_runtime_for_chat(
+        definition, docs, run_dir=run_dir, bm25_only=bm25_only
+    )
+
+    console.print(
+        f"[bold cyan]{definition.meta.name}[/bold cyan] v{definition.meta.version} "
+        f"(tools: {definition.attached_tool_names() or ['none']})"
+    )
+
+    history: list[dict[str, str]] = []
+    if question is not None:
+        record = runtime.answer(question, history=history)
+        _render_answer_record(record, show_trace=trace)
+        return
+
+    console.print("Type a question, or 'exit' / 'quit' to stop.")
+    while True:
+        try:
+            if sys.stdin.isatty():
+                user_input = console.input("[bold]You>[/bold] ")
+            else:
+                raw = sys.stdin.readline()
+                if not raw:
+                    break
+                user_input = raw
+        except (EOFError, KeyboardInterrupt):
+            break
+
+        cleaned = user_input.strip()
+        if not cleaned:
+            continue
+        if cleaned.lower() in {"exit", "quit", ":q"}:
+            break
+
+        record = runtime.answer(cleaned, history=history)
+        _render_answer_record(record, show_trace=trace)
+        history.append({"role": "user", "content": cleaned})
+        history.append({"role": "assistant", "content": record.output.answer})
 
 
 if __name__ == "__main__":
