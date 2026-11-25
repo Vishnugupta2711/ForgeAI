@@ -31,6 +31,7 @@ def test_cli_help_via_runner() -> None:
     assert "chat" in result.stdout
     assert "intake" in result.stdout
     assert "generate" in result.stdout
+    assert "evals" in result.stdout
 
 
 def test_cli_help_via_entrypoint() -> None:
@@ -300,3 +301,11 @@ def test_cli_generate_writes_definition_and_log(tmp_path: Path, monkeypatch) -> 
     assert (out_dir / "generation_log.json").is_file()
     loaded_def = AgentDefinition.load_yaml(out_dir / "definition.yaml")
     assert loaded_def.attached_tool_names() == []
+
+
+def test_cli_evals_help_shows_generate() -> None:
+    """Verify `forge evals --help` exposes the generate subcommand."""
+    runner = CliRunner()
+    res = runner.invoke(app, ["evals", "--help"])
+    assert res.exit_code == 0
+    assert "generate" in res.stdout
