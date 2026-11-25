@@ -32,6 +32,7 @@ def test_cli_help_via_runner() -> None:
     assert "intake" in result.stdout
     assert "generate" in result.stdout
     assert "evals" in result.stdout
+    assert "judge-selftest" in result.stdout
 
 
 def test_cli_help_via_entrypoint() -> None:
@@ -304,8 +305,9 @@ def test_cli_generate_writes_definition_and_log(tmp_path: Path, monkeypatch) -> 
 
 
 def test_cli_evals_help_shows_generate() -> None:
-    """Verify `forge evals --help` exposes the generate subcommand."""
+    """Verify `forge evals --help` exposes the generate and run subcommands."""
     runner = CliRunner()
     res = runner.invoke(app, ["evals", "--help"])
     assert res.exit_code == 0
     assert "generate" in res.stdout
+    assert "run" in res.stdout
