@@ -1,0 +1,1 @@
+"""Declarative agent definition generator."""

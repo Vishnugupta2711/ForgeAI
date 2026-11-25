@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "forge"
+version = "0.1.0"
+description = "ForgeAI: autonomous factory that builds, tests, judges, and refines agents."
+readme = "docs/ASSIGNMENT.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2",
+    "typer",
+    "pyyaml",
+    "rich",
+    "pypdf",
+    "rank_bm25",
+    "numpy",
+    "httpx",
+    "pytest",
+    "ruff",
+]
+
+[project.scripts]
+forge = "forge.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
