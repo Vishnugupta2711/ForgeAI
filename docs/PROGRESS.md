@@ -76,3 +76,15 @@
   - Tests in `tests/test_evals.py` and `tests/test_smoke.py`
 - **Verification**:
   - `pytest -q`, `ruff check .`, and `forge evals generate` CLI checks passed cleanly.
+
+### Phase 6 — Judge & Canary Self-Test (`phase-6-judge`)
+- **Status**: Complete
+- **Deliverables**:
+  - `docs/JUDGE.md` and `prompts/judge_*.v1.md` (`judge_extract_claims.v1.md`, `judge_verify_claims.v1.md`, `judge_correctness.v1.md`)
+  - `forge.judge.deterministic`: refusal matching, retrieved-chunk citation validity, canonicalized key-fact recall (numbers, units, currency, dates, fuzzy text), numeric hallucination guard, Wilson 95% confidence intervals, and length-vs-pass Pearson correlation
+  - `forge.judge.scorer`: `Judge` combining deterministic checks with 2-pass order-shuffled claim-level groundedness and ambiguous correctness verification (falling back deterministically with `uncertain=True` on disagreement), self-preference warnings, and 100% pass-rate suspicion flag
+  - `forge.judge.selftest`: 8-type canary suite (`gold_answer`, `numerically_corrupted`, `hallucinated_claim`, `wrong_document`, `padded_verbose`, `terse_correct`, `correct_refusal`, `wrongful_refusal`) writing `judge_reliability.json`
+  - CLI commands `forge evals run` (writing `results.json` + `scorecard.md`) and `forge judge-selftest`
+  - Tests in `tests/test_judge.py` and `tests/test_smoke.py`
+- **Verification**:
+  - `pytest -q`, `ruff check .`, `forge evals run`, and `forge judge-selftest` passed cleanly.

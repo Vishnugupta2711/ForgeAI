@@ -20,6 +20,7 @@ from forge.generator import AgentGenerator, GenerationLog
 from forge.groundability import GroundabilityGuard, StrictGroundabilityError
 from forge.ingest.profile import ingest_folder
 from forge.intake import IntakeInterviewer, RequirementsDocument
+from forge.judge import EvalScorecard, Judge, JudgeReliabilityReport, run_judge_selftest
 from forge.llm.client import LLMClient
 from forge.llm.models import LLMProviderError
 from forge.retrieval.hybrid import HybridIndex, HybridRetriever
@@ -733,6 +734,196 @@ def evals_generate(
             title=f"Eval Set Saved -> {out / 'eval_set.json'}",
             title_align="left",
         )
+    )
+
+
+def _run_evals_suite_pipeline(
+    *,
+    definition_path: Path,
+    eval_set_path: Path,
+    docs: Path,
+    split: str,
+    out_dir: Path,
+    bm25_only: bool,
+    llm_client: LLMClient | None = None,
+) -> EvalScorecard:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    cfg = load_config()
+    client = llm_client or LLMClient.from_config(cfg, usage_log_path=out_dir / "usage.jsonl")
+    definition = AgentDefinition.load_yaml(definition_path)
+    eval_set = EvalSet.model_validate_json(eval_set_path.read_text(encoding="utf-8"))
+
+    if split == "dev":
+        cases = list(eval_set.dev_cases)
+    elif split == "held_out":
+        cases = list(eval_set.held_out_cases)
+    elif split == "all":
+        cases = [*eval_set.dev_cases, *eval_set.held_out_cases]
+    else:
+        raise ValueError(f"Unsupported split '{split}'. Use dev, held_out, or all.")
+
+    ingest_res, chunks, _ = ingest_folder(
+        docs,
+        chunk_size=definition.retrieval.chunk_size,
+        overlap=definition.retrieval.overlap,
+    )
+    chunk_map = {c.chunk_id: c for c in chunks}
+
+    index_dir = out_dir / "index"
+    index: HybridIndex | None = None
+    if (index_dir / "meta.json").is_file():
+        index = HybridIndex.load(index_dir)
+
+    if index is None:
+        if bm25_only:
+            index = HybridIndex.build(chunks, llm_client=None)
+        else:
+            try:
+                index = HybridIndex.build(
+                    chunks, llm_client=client, embed_model=definition.model.embed_model
+                )
+            except LLMProviderError as exc:
+                console.print(
+                    f"[yellow]Embedding provider unavailable ({exc}); "
+                    "building BM25-only index.[/yellow]"
+                )
+                index = HybridIndex.build(chunks, llm_client=None)
+        index.save(index_dir)
+
+    tool_ctx = ToolContext.from_documents(
+        ingest_res.documents,
+        cache_dir=out_dir / "tool_cache",
+        offline_only=True,
+    )
+    runtime = AgentRuntime(
+        definition, index, llm_client=client, tool_context=tool_ctx, config=cfg
+    )
+    records = [runtime.answer(c.question) for c in cases]
+
+    judge = Judge(client, config=cfg, seed=eval_set.seed)
+    return judge.evaluate_suite(
+        definition,
+        cases,
+        records,
+        chunk_map,
+        split=split,
+        out_dir=out_dir,
+    )
+
+
+@evals_app.command("run")
+def evals_run(
+    definition: Annotated[
+        Path,
+        typer.Option("--definition", exists=True, dir_okay=False, help="Path to definition.yaml."),
+    ],
+    eval_set: Annotated[
+        Path,
+        typer.Option("--eval-set", exists=True, dir_okay=False, help="Path to eval_set.json."),
+    ],
+    docs: Annotated[
+        Path,
+        typer.Option("--docs", exists=True, file_okay=False, help="Document folder."),
+    ],
+    split: Annotated[
+        str,
+        typer.Option("--split", help="Which eval split to run: dev, held_out, or all."),
+    ] = "dev",
+    out: Annotated[
+        Path,
+        typer.Option("--out", help="Output directory for results.json and scorecard.md."),
+    ] = Path("runs/eval_run"),
+    bm25_only: Annotated[
+        bool,
+        typer.Option("--bm25-only", help="Build index without dense embedding calls."),
+    ] = False,
+) -> None:
+    """Run an agent definition against an eval set and score with ForgeAI Judge."""
+    scorecard = _run_evals_suite_pipeline(
+        definition_path=definition,
+        eval_set_path=eval_set,
+        docs=docs,
+        split=split,
+        out_dir=out,
+        bm25_only=bm25_only,
+    )
+    console.print(
+        Panel(
+            f"Split: {scorecard.split} | Passed: {scorecard.passed_cases}/{scorecard.total_cases} "
+            f"({scorecard.overall_pass_rate * 100:.1f}%)\n"
+            f"Wilson 95% CI: [{scorecard.overall_wilson_low * 100:.1f}%, "
+            f"{scorecard.overall_wilson_high * 100:.1f}%]\n"
+            f"Judge: {scorecard.judge_model} (same_family={scorecard.same_family_as_agent})",
+            title=f"Scorecard Saved -> {out / 'scorecard.md'}",
+            title_align="left",
+        )
+    )
+
+
+def _run_judge_selftest_pipeline(
+    *,
+    docs: Path,
+    eval_set_path: Path | None,
+    out_dir: Path,
+    llm_client: LLMClient | None = None,
+) -> JudgeReliabilityReport:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    cfg = load_config()
+    client = llm_client or LLMClient.from_config(cfg, usage_log_path=out_dir / "usage.jsonl")
+    _, chunks, _ = ingest_folder(docs)
+    chunk_map = {c.chunk_id: c for c in chunks}
+    eval_set = (
+        EvalSet.model_validate_json(eval_set_path.read_text(encoding="utf-8"))
+        if eval_set_path is not None
+        else None
+    )
+    return run_judge_selftest(
+        client,
+        chunk_map,
+        eval_set=eval_set,
+        config=cfg,
+        out_path=out_dir / "judge_reliability.json",
+    )
+
+
+@app.command("judge-selftest")
+def judge_selftest(
+    eval_set: Annotated[
+        Path | None,
+        typer.Option("--eval-set", exists=True, dir_okay=False, help="Optional eval_set.json."),
+    ] = None,
+    docs: Annotated[
+        Path,
+        typer.Option("--docs", exists=True, file_okay=False, help="Document folder."),
+    ] = Path("fixtures/docs"),
+    out: Annotated[
+        Path,
+        typer.Option("--out", help="Output directory for judge_reliability.json."),
+    ] = Path("runs/judge_selftest"),
+) -> None:
+    """Run canary reliability self-test for the ForgeAI Judge."""
+    report = _run_judge_selftest_pipeline(
+        docs=docs, eval_set_path=eval_set, out_dir=out
+    )
+    table = Table(title=f"Judge Self-Test Reliability ({report.judge_model})")
+    table.add_column("Canary Type", style="cyan")
+    table.add_column("Expected")
+    table.add_column("Total", justify="right")
+    table.add_column("False Pass Rate", justify="right")
+    table.add_column("False Fail Rate", justify="right")
+    for m in report.per_canary_type:
+        table.add_row(
+            m.canary_type,
+            "PASS" if m.expected_pass else "FAIL",
+            str(m.total),
+            f"{m.false_pass_rate * 100:.1f}%",
+            f"{m.false_fail_rate * 100:.1f}%",
+        )
+    console.print(table)
+    console.print(
+        f"Saved -> {out / 'judge_reliability.json'} | "
+        f"Overall False Pass: {report.overall_false_pass_rate * 100:.1f}% | "
+        f"Overall False Fail: {report.overall_false_fail_rate * 100:.1f}%"
     )
 
 
