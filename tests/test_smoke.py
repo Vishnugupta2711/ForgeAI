@@ -29,6 +29,7 @@ def test_cli_help_via_runner() -> None:
     assert "ingest" in result.stdout
     assert "search" in result.stdout
     assert "chat" in result.stdout
+    assert "intake" in result.stdout
 
 
 def test_cli_help_via_entrypoint() -> None:
@@ -135,3 +136,102 @@ def test_cli_chat_multiturn_with_trace_and_refusal(monkeypatch) -> None:
     assert "acoustic_guide.md" in res.stdout
     assert "Trace:" in res.stdout
     assert "REFUSED" in res.stdout
+
+
+def test_cli_intake_auto_writes_requirements_and_strict_exits(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Verify `forge intake --brief ... --docs ... --auto --out ...` writes artifacts."""
+    brief_file = tmp_path / "brief.txt"
+    brief_file.write_text(
+        "I need an assistant for hydrophone deployment depth and calibration schedules.",
+        encoding="utf-8",
+    )
+    out_dir = tmp_path / "runs" / "tmp"
+
+    fake_llm = FakeLLM(
+        responses=[
+            json.dumps(
+                {
+                    "questions": [
+                        {"id": "Q1", "question": "Preferred answer length?", "why": "tone"}
+                    ]
+                }
+            ),
+            json.dumps(
+                {"answers": [{"question_id": "Q1", "answer": "Keep answers concise."}]}
+            ),
+            json.dumps(
+                {
+                    "scope": "Hydrophone depth and buoy calibration.",
+                    "audience": "Field technicians",
+                    "tone": "Concise",
+                    "must_answer_topics": [
+                        {
+                            "id": "REQ-001",
+                            "title": "Deployment Depth",
+                            "description": "Hydrophone pod deployment depth",
+                            "priority": "high",
+                        }
+                    ],
+                    "must_refuse_topics": [],
+                    "assumptions": [],
+                    "capabilities_needed": [],
+                }
+            ),
+            json.dumps(
+                {
+                    "topics": [
+                        {
+                            "topic_id": "TOP-001",
+                            "title": "Deployment Depth",
+                            "description": "Hydrophone pod deployment depth",
+                            "source_req_id": "REQ-001",
+                            "is_implicit": False,
+                        }
+                    ]
+                }
+            ),
+            json.dumps(
+                {
+                    "status": "SUPPORTED",
+                    "quotes": [
+                        {
+                            "chunk_id": "acoustic_guide.md::c2",
+                            "quote": "Deploy hydrophone pods at 45 meters below mean sea level",
+                        }
+                    ],
+                    "reasoning": "Supported by acoustic_guide.md.",
+                    "gap_note": None,
+                }
+            ),
+        ]
+    )
+
+    monkeypatch.setattr(
+        forge_cli.LLMClient,
+        "from_config",
+        classmethod(lambda cls, *args, **kwargs: fake_llm),
+    )
+
+    runner = CliRunner()
+    res = runner.invoke(
+        app,
+        [
+            "intake",
+            "--brief",
+            str(brief_file),
+            "--docs",
+            str(DOCS_DIR),
+            "--auto",
+            "--bm25-only",
+            "--out",
+            str(out_dir),
+        ],
+    )
+    assert res.exit_code == 0
+    assert (out_dir / "requirements.json").is_file()
+    assert (out_dir / "requirements.md").is_file()
+    md_content = (out_dir / "requirements.md").read_text(encoding="utf-8")
+    assert "## Groundability Report" in md_content
+    assert "Auto-assumed (Q1:" in md_content
