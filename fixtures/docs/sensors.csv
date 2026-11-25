@@ -1,0 +1,5 @@
+sensor_id,model,depth_m,battery_days,active
+SNS-101,HydroPod-A,45,60,true
+SNS-102,TempBuoy-B,0,90,true
+SNS-103,SalinityPro-C,120,45,false
+SNS-104,CurrentMeter-D,30,75,true
