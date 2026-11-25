@@ -15,6 +15,7 @@ from forge import __version__
 from forge.agent.runtime import AgentRuntime
 from forge.agent.schema import AgentDefinition, AnswerRecord
 from forge.config import load_config
+from forge.evals import EvalGenerator, EvalSet
 from forge.generator import AgentGenerator, GenerationLog
 from forge.groundability import GroundabilityGuard, StrictGroundabilityError
 from forge.ingest.profile import ingest_folder
@@ -30,6 +31,12 @@ app = typer.Typer(
     help="ForgeAI: autonomous factory for building, testing, and refining agents.",
     no_args_is_help=True,
 )
+evals_app = typer.Typer(
+    name="evals",
+    help="Generate and inspect source-verified evaluation datasets.",
+    no_args_is_help=True,
+)
+app.add_typer(evals_app, name="evals")
 console = Console()
 
 
@@ -607,6 +614,123 @@ def generate(
             f"alpha={definition.retrieval.hybrid_alpha}\n"
             f"Smoke tests run: {len(gen_log.smoke_test_results)}",
             title=f"Generated Definition -> {out / 'definition.yaml'}",
+            title_align="left",
+        )
+    )
+
+
+def _run_evals_generate_pipeline(
+    *,
+    definition_path: Path,
+    requirements_path: Path,
+    docs: Path,
+    out_dir: Path,
+    seed: int | None,
+    bm25_only: bool,
+    llm_client: LLMClient | None = None,
+) -> EvalSet:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    cfg = load_config()
+    client = llm_client or LLMClient.from_config(cfg, usage_log_path=out_dir / "usage.jsonl")
+    definition = AgentDefinition.load_yaml(definition_path)
+    requirements = RequirementsDocument.model_validate_json(
+        requirements_path.read_text(encoding="utf-8")
+    )
+
+    _, chunks, profile = ingest_folder(
+        docs,
+        chunk_size=definition.retrieval.chunk_size,
+        overlap=definition.retrieval.overlap,
+    )
+    index_dir = out_dir / "index"
+    index: HybridIndex | None = None
+    if (index_dir / "meta.json").is_file():
+        index = HybridIndex.load(index_dir)
+
+    if index is None:
+        if bm25_only:
+            index = HybridIndex.build(chunks, llm_client=None)
+        else:
+            try:
+                index = HybridIndex.build(
+                    chunks,
+                    llm_client=client,
+                    embed_model=definition.model.embed_model,
+                )
+            except LLMProviderError as exc:
+                console.print(
+                    f"[yellow]Embedding provider unavailable ({exc}); "
+                    "building BM25-only index.[/yellow]"
+                )
+                index = HybridIndex.build(chunks, llm_client=None)
+        index.save(index_dir)
+
+    generator = EvalGenerator(client, config=cfg)
+    return generator.generate(
+        definition,
+        requirements,
+        profile,
+        index,
+        seed=seed,
+        out_dir=out_dir,
+    )
+
+
+@evals_app.command("generate")
+def evals_generate(
+    definition: Annotated[
+        Path,
+        typer.Option(
+            "--definition",
+            exists=True,
+            dir_okay=False,
+            help="Path to definition.yaml.",
+        ),
+    ],
+    requirements: Annotated[
+        Path,
+        typer.Option(
+            "--requirements",
+            exists=True,
+            dir_okay=False,
+            help="Path to requirements.json.",
+        ),
+    ],
+    docs: Annotated[
+        Path,
+        typer.Option("--docs", exists=True, file_okay=False, help="Document folder."),
+    ],
+    out: Annotated[
+        Path,
+        typer.Option("--out", help="Output directory for eval_set.json and eval_set_stats.md."),
+    ] = Path("runs/evals"),
+    seed: Annotated[
+        int | None,
+        typer.Option("--seed", help="Random seed for stratified dev/held_out split."),
+    ] = None,
+    bm25_only: Annotated[
+        bool,
+        typer.Option("--bm25-only", help="Build index without dense embedding calls."),
+    ] = False,
+) -> None:
+    """Generate a verified dev/held_out evaluation set from corpus documents."""
+    eval_set = _run_evals_generate_pipeline(
+        definition_path=definition,
+        requirements_path=requirements,
+        docs=docs,
+        out_dir=out,
+        seed=seed,
+        bm25_only=bm25_only,
+    )
+    console.print(
+        Panel(
+            f"Total verified cases: {eval_set.total_cases} "
+            f"(dev={len(eval_set.dev_cases)}, held_out={len(eval_set.held_out_cases)})\n"
+            f"Rejected candidates: {len(eval_set.rejected_cases)}\n"
+            f"Eval writer model: {eval_set.eval_writer_model} "
+            f"(same_family_as_agent={eval_set.same_family_as_agent})\n"
+            f"Categories: {eval_set.category_counts}",
+            title=f"Eval Set Saved -> {out / 'eval_set.json'}",
             title_align="left",
         )
     )

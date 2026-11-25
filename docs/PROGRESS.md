@@ -66,3 +66,13 @@
   - Tests in `tests/test_generator.py` (8-case tool-selection matrix, heuristics, determinism/cache, smoke run) and `tests/test_smoke.py`
 - **Verification**:
   - `pytest -q`, `ruff check .`, and `forge generate` CLI checks passed cleanly.
+
+### Phase 5 — Eval Generator (`phase-5-eval-generator`)
+- **Status**: Complete
+- **Deliverables**:
+  - `prompts/evalgen_*.v1.md`: committed generation, solvability, and OOS-check templates
+  - `forge.evals`: `EvalCase` / `EvalSet` models, Gate 1 (`verify_case_key_facts` normalized/fuzzy check), Gate 2 (`check_solvability` from gold chunks only), Gate 3 (`check_oos_unanswerable`), Gate 4 (`dedupe_by_embedding`), Gate 5 (`stratified_split` deterministic ~2/3 dev, ~1/3 held_out), and `EvalGenerator` respecting quotas (>= 36 cases) and recording eval-writer model/family vs agent model
+  - CLI command `forge evals generate --definition ... --requirements ... --docs ... --out ...` writing `eval_set.json` and `eval_set_stats.md`
+  - Tests in `tests/test_evals.py` and `tests/test_smoke.py`
+- **Verification**:
+  - `pytest -q`, `ruff check .`, and `forge evals generate` CLI checks passed cleanly.
