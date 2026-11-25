@@ -1,0 +1,147 @@
+%PDF-1.3
+%‚„œ”
+1 0 obj
+<<
+/Producer (pypdf)
+>>
+endobj
+2 0 obj
+<<
+/Type /Pages
+/Count 2
+/Kids [ 4 0 R 7 0 R ]
+>>
+endobj
+3 0 obj
+<<
+/Type /Catalog
+/Pages 2 0 R
+>>
+endobj
+4 0 obj
+<<
+/Type /Page
+/Resources <<
+/Font <<
+/F1 5 0 R
+>>
+>>
+/MediaBox [ 0.0 0.0 612 792 ]
+/Parent 2 0 R
+/Contents [ 6 0 R ]
+>>
+endobj
+5 0 obj
+<<
+/Type /Font
+/Subtype /Type1
+/BaseFont /Helvetica
+>>
+endobj
+6 0 obj
+<<
+/Length 1029
+>>
+stream
+BT
+/F1 11 Tf
+54 740 Td
+(SUPPLIER COMMERCIAL TERMS AND RETURNS POLICY \(DOC SUP-01\)) Tj
+0 -15 Td
+() Tj
+0 -15 Td
+(1. Payment Terms and Early Settlement) Tj
+0 -15 Td
+(Standard invoice terms across all four approved suppliers are Net 30 calendar) Tj
+0 -15 Td
+(days from bill of lading date.) Tj
+0 -15 Td
+(Purchase orders totaling USD 5,000 or more qualify for a 2% early-payment) Tj
+0 -15 Td
+(discount when settled within 10 calendar days of invoice issue.) Tj
+0 -15 Td
+() Tj
+0 -15 Td
+(2. Line-Item Volume Discounts and Handling Fees) Tj
+0 -15 Td
+(Orders meeting or exceeding 10 units on a single part line receive a 5% unit) Tj
+0 -15 Td
+(price discount. Orders meeting or exceeding 25 units on a single part line) Tj
+0 -15 Td
+(receive a 10% unit price discount \(discounts do not stack\).) Tj
+0 -15 Td
+(Any purchase order with total merchandise value below USD 500 incurs a flat) Tj
+0 -15 Td
+(USD 125 small-order handling fee.) Tj
+0 -15 Td
+(Every order must meet or exceed the catalogue min_order_qty for each line.) Tj
+0 -15 Td
+ET
+endstream
+endobj
+7 0 obj
+<<
+/Type /Page
+/Resources <<
+/Font <<
+/F1 8 0 R
+>>
+>>
+/MediaBox [ 0.0 0.0 612 792 ]
+/Parent 2 0 R
+/Contents [ 9 0 R ]
+>>
+endobj
+8 0 obj
+<<
+/Type /Font
+/Subtype /Type1
+/BaseFont /Helvetica
+>>
+endobj
+9 0 obj
+<<
+/Length 580
+>>
+stream
+BT
+/F1 11 Tf
+54 740 Td
+(3. Returns, Restocking, and Hazmat Exclusions) Tj
+0 -15 Td
+(Unused non-hazmat spares in original sealed packaging may be returned within) Tj
+0 -15 Td
+(30 calendar days of delivery subject to a 15% restocking fee.) Tj
+0 -15 Td
+(Items flagged hazmat_flag=true in spares_catalogue.csv are strictly) Tj
+0 -15 Td
+(non-returnable once dispatched from the supplier warehouse.) Tj
+0 -15 Td
+(Factory-defective parts \(documented within 14 calendar days\) are replaced at) Tj
+0 -15 Td
+(zero restocking fee with return freight covered by the supplier.) Tj
+0 -15 Td
+ET
+endstream
+endobj
+xref
+0 10
+0000000000 65535 f 
+0000000015 00000 n 
+0000000054 00000 n 
+0000000119 00000 n 
+0000000168 00000 n 
+0000000304 00000 n 
+0000000374 00000 n 
+0000001455 00000 n 
+0000001591 00000 n 
+0000001661 00000 n 
+trailer
+<<
+/Size 10
+/Root 3 0 R
+/Info 1 0 R
+>>
+startxref
+2292
+%%EOF

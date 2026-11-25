@@ -23,9 +23,11 @@ dist/
 .ruff_cache/
 .mypy_cache/
 
-# Ephemeral run outputs (committed demos live under demos/)
+# Ephemeral run outputs (committed demo runs live under runs/hr_policy & runs/ship_spares)
 runs/*
 !runs/.gitkeep
+!runs/hr_policy/
+!runs/ship_spares/
 
 # OS files
 .DS_Store

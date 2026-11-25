@@ -1,0 +1,161 @@
+part_no,description,unit_price_usd,min_order_qty,lead_time_days,supplier,stock_location,hazmat_flag
+SP-1001,Main Engine Fuel Injector MK-2,432.50,2,8,NordicMarine Supply,Rotterdam-WH1,false
+SP-1002,Cylinder Liner Sealing Ring MK-3,93.50,5,7,BalticValve GmbH,Rotterdam-WH1,false
+SP-1003,Ballast Centrifugal Impeller MK-4,927.50,1,13,PacificPump Co,Singapore-WH2,false
+SP-1004,High-Pressure Hydraulic Valve MK-5,365.00,2,6,AegisElectro Ltd,Singapore-WH2,false
+SP-1005,Marine Lithium Battery Module MK-1,1312.50,1,15,NordicMarine Supply,Hamburg-WH3,true
+SP-1006,Refrigerant R404A Service Cylinder MK-2,270.00,2,10,BalticValve GmbH,Hamburg-WH3,true
+SP-1007,Bilge Oily-Water Sensor Probe MK-3,260.00,2,12,PacificPump Co,Busan-WH4,false
+SP-1008,Boiler Burner Igniter Assembly MK-4,157.50,4,5,AegisElectro Ltd,Busan-WH4,false
+SP-1009,Anti-Corrosion Zinc Anode Block MK-5,67.00,10,5,NordicMarine Supply,Rotterdam-WH1,false
+SP-1010,Synthetic Gear Oil 20L Drum MK-1,212.50,2,8,BalticValve GmbH,Rotterdam-WH1,true
+SP-1011,Main Engine Fuel Injector MK-2,470.00,2,10,PacificPump Co,Singapore-WH2,false
+SP-1012,Cylinder Liner Sealing Ring MK-3,131.00,5,5,AegisElectro Ltd,Singapore-WH2,false
+SP-1013,Ballast Centrifugal Impeller MK-4,965.00,1,11,NordicMarine Supply,Hamburg-WH3,false
+SP-1014,High-Pressure Hydraulic Valve MK-5,315.00,2,8,BalticValve GmbH,Hamburg-WH3,false
+SP-1015,Marine Lithium Battery Module MK-1,1262.50,1,17,PacificPump Co,Busan-WH4,true
+SP-1016,Refrigerant R404A Service Cylinder MK-2,220.00,2,8,AegisElectro Ltd,Busan-WH4,true
+SP-1017,Bilge Oily-Water Sensor Probe MK-3,297.50,2,10,NordicMarine Supply,Rotterdam-WH1,false
+SP-1018,Boiler Burner Igniter Assembly MK-4,195.00,4,7,BalticValve GmbH,Rotterdam-WH1,false
+SP-1019,Anti-Corrosion Zinc Anode Block MK-5,104.50,10,7,PacificPump Co,Singapore-WH2,false
+SP-1020,Synthetic Gear Oil 20L Drum MK-1,250.00,2,6,AegisElectro Ltd,Singapore-WH2,true
+SP-1021,Main Engine Fuel Injector MK-2,420.00,2,8,NordicMarine Supply,Hamburg-WH3,false
+SP-1022,Cylinder Liner Sealing Ring MK-3,81.00,5,7,BalticValve GmbH,Hamburg-WH3,false
+SP-1023,Ballast Centrifugal Impeller MK-4,915.00,1,13,PacificPump Co,Busan-WH4,false
+SP-1024,High-Pressure Hydraulic Valve MK-5,352.50,2,6,AegisElectro Ltd,Busan-WH4,false
+SP-1025,Marine Lithium Battery Module MK-1,1300.00,1,15,NordicMarine Supply,Rotterdam-WH1,true
+SP-1026,Refrigerant R404A Service Cylinder MK-2,257.50,2,10,BalticValve GmbH,Rotterdam-WH1,true
+SP-1027,Bilge Oily-Water Sensor Probe MK-3,335.00,2,12,PacificPump Co,Singapore-WH2,false
+SP-1028,Boiler Burner Igniter Assembly MK-4,145.00,4,5,AegisElectro Ltd,Singapore-WH2,false
+SP-1029,Anti-Corrosion Zinc Anode Block MK-5,54.50,10,5,NordicMarine Supply,Hamburg-WH3,false
+SP-1030,Synthetic Gear Oil 20L Drum MK-1,200.00,2,8,BalticValve GmbH,Hamburg-WH3,true
+SP-1031,Main Engine Fuel Injector MK-2,457.50,2,10,PacificPump Co,Busan-WH4,false
+SP-1032,Cylinder Liner Sealing Ring MK-3,118.50,5,5,AegisElectro Ltd,Busan-WH4,false
+SP-1033,Ballast Centrifugal Impeller MK-4,952.50,1,11,NordicMarine Supply,Rotterdam-WH1,false
+SP-1034,High-Pressure Hydraulic Valve MK-5,390.00,2,8,BalticValve GmbH,Rotterdam-WH1,false
+SP-1035,Marine Lithium Battery Module MK-1,1250.00,1,17,PacificPump Co,Singapore-WH2,true
+SP-1036,Refrigerant R404A Service Cylinder MK-2,207.50,2,8,AegisElectro Ltd,Singapore-WH2,true
+SP-1037,Bilge Oily-Water Sensor Probe MK-3,285.00,2,10,NordicMarine Supply,Hamburg-WH3,false
+SP-1038,Boiler Burner Igniter Assembly MK-4,182.50,4,7,BalticValve GmbH,Hamburg-WH3,false
+SP-1039,Anti-Corrosion Zinc Anode Block MK-5,92.00,10,7,PacificPump Co,Busan-WH4,false
+SP-1040,Synthetic Gear Oil 20L Drum MK-1,237.50,2,6,AegisElectro Ltd,Busan-WH4,true
+SP-1041,Main Engine Fuel Injector MK-2,495.00,2,8,NordicMarine Supply,Rotterdam-WH1,false
+SP-1042,Cylinder Liner Sealing Ring MK-3,68.50,5,7,BalticValve GmbH,Rotterdam-WH1,false
+SP-1043,Ballast Centrifugal Impeller MK-4,902.50,1,13,PacificPump Co,Singapore-WH2,false
+SP-1044,High-Pressure Hydraulic Valve MK-5,340.00,2,6,AegisElectro Ltd,Singapore-WH2,false
+SP-1045,Marine Lithium Battery Module MK-1,1287.50,1,15,NordicMarine Supply,Hamburg-WH3,true
+SP-1046,Refrigerant R404A Service Cylinder MK-2,245.00,2,10,BalticValve GmbH,Hamburg-WH3,true
+SP-1047,Bilge Oily-Water Sensor Probe MK-3,322.50,2,12,PacificPump Co,Busan-WH4,false
+SP-1048,Boiler Burner Igniter Assembly MK-4,220.00,4,5,AegisElectro Ltd,Busan-WH4,false
+SP-1049,Anti-Corrosion Zinc Anode Block MK-5,42.00,10,5,NordicMarine Supply,Rotterdam-WH1,false
+SP-1050,Synthetic Gear Oil 20L Drum MK-1,187.50,2,8,BalticValve GmbH,Rotterdam-WH1,true
+SP-1051,Main Engine Fuel Injector MK-2,445.00,2,10,PacificPump Co,Singapore-WH2,false
+SP-1052,Cylinder Liner Sealing Ring MK-3,106.00,5,5,AegisElectro Ltd,Singapore-WH2,false
+SP-1053,Ballast Centrifugal Impeller MK-4,940.00,1,11,NordicMarine Supply,Hamburg-WH3,false
+SP-1054,High-Pressure Hydraulic Valve MK-5,377.50,2,8,BalticValve GmbH,Hamburg-WH3,false
+SP-1055,Marine Lithium Battery Module MK-1,1325.00,1,17,PacificPump Co,Busan-WH4,true
+SP-1056,Refrigerant R404A Service Cylinder MK-2,195.00,2,8,AegisElectro Ltd,Busan-WH4,true
+SP-1057,Bilge Oily-Water Sensor Probe MK-3,272.50,2,10,NordicMarine Supply,Rotterdam-WH1,false
+SP-1058,Boiler Burner Igniter Assembly MK-4,170.00,4,7,BalticValve GmbH,Rotterdam-WH1,false
+SP-1059,Anti-Corrosion Zinc Anode Block MK-5,79.50,10,7,PacificPump Co,Singapore-WH2,false
+SP-1060,Synthetic Gear Oil 20L Drum MK-1,225.00,2,6,AegisElectro Ltd,Singapore-WH2,true
+SP-1061,Main Engine Fuel Injector MK-2,482.50,2,8,NordicMarine Supply,Hamburg-WH3,false
+SP-1062,Cylinder Liner Sealing Ring MK-3,143.50,5,7,BalticValve GmbH,Hamburg-WH3,false
+SP-1063,Ballast Centrifugal Impeller MK-4,890.00,1,13,PacificPump Co,Busan-WH4,false
+SP-1064,High-Pressure Hydraulic Valve MK-5,327.50,2,6,AegisElectro Ltd,Busan-WH4,false
+SP-1065,Marine Lithium Battery Module MK-1,1275.00,1,15,NordicMarine Supply,Rotterdam-WH1,true
+SP-1066,Refrigerant R404A Service Cylinder MK-2,232.50,2,10,BalticValve GmbH,Rotterdam-WH1,true
+SP-1067,Bilge Oily-Water Sensor Probe MK-3,310.00,2,12,PacificPump Co,Singapore-WH2,false
+SP-1068,Boiler Burner Igniter Assembly MK-4,207.50,4,5,AegisElectro Ltd,Singapore-WH2,false
+SP-1069,Anti-Corrosion Zinc Anode Block MK-5,117.00,10,5,NordicMarine Supply,Hamburg-WH3,false
+SP-1070,Synthetic Gear Oil 20L Drum MK-1,175.00,2,8,BalticValve GmbH,Hamburg-WH3,true
+SP-1071,Main Engine Fuel Injector MK-2,432.50,2,10,PacificPump Co,Busan-WH4,false
+SP-1072,Cylinder Liner Sealing Ring MK-3,93.50,5,5,AegisElectro Ltd,Busan-WH4,false
+SP-1073,Ballast Centrifugal Impeller MK-4,927.50,1,11,NordicMarine Supply,Rotterdam-WH1,false
+SP-1074,High-Pressure Hydraulic Valve MK-5,365.00,2,8,BalticValve GmbH,Rotterdam-WH1,false
+SP-1075,Marine Lithium Battery Module MK-1,1312.50,1,17,PacificPump Co,Singapore-WH2,true
+SP-1076,Refrigerant R404A Service Cylinder MK-2,270.00,2,8,AegisElectro Ltd,Singapore-WH2,true
+SP-1077,Bilge Oily-Water Sensor Probe MK-3,260.00,2,10,NordicMarine Supply,Hamburg-WH3,false
+SP-1078,Boiler Burner Igniter Assembly MK-4,157.50,4,7,BalticValve GmbH,Hamburg-WH3,false
+SP-1079,Anti-Corrosion Zinc Anode Block MK-5,67.00,10,7,PacificPump Co,Busan-WH4,false
+SP-1080,Synthetic Gear Oil 20L Drum MK-1,212.50,2,6,AegisElectro Ltd,Busan-WH4,true
+SP-1081,Main Engine Fuel Injector MK-2,470.00,2,8,NordicMarine Supply,Rotterdam-WH1,false
+SP-1082,Cylinder Liner Sealing Ring MK-3,131.00,5,7,BalticValve GmbH,Rotterdam-WH1,false
+SP-1083,Ballast Centrifugal Impeller MK-4,965.00,1,13,PacificPump Co,Singapore-WH2,false
+SP-1084,High-Pressure Hydraulic Valve MK-5,315.00,2,6,AegisElectro Ltd,Singapore-WH2,false
+SP-1085,Marine Lithium Battery Module MK-1,1262.50,1,15,NordicMarine Supply,Hamburg-WH3,true
+SP-1086,Refrigerant R404A Service Cylinder MK-2,220.00,2,10,BalticValve GmbH,Hamburg-WH3,true
+SP-1087,Bilge Oily-Water Sensor Probe MK-3,297.50,2,12,PacificPump Co,Busan-WH4,false
+SP-1088,Boiler Burner Igniter Assembly MK-4,195.00,4,5,AegisElectro Ltd,Busan-WH4,false
+SP-1089,Anti-Corrosion Zinc Anode Block MK-5,104.50,10,5,NordicMarine Supply,Rotterdam-WH1,false
+SP-1090,Synthetic Gear Oil 20L Drum MK-1,250.00,2,8,BalticValve GmbH,Rotterdam-WH1,true
+SP-1091,Main Engine Fuel Injector MK-2,420.00,2,10,PacificPump Co,Singapore-WH2,false
+SP-1092,Cylinder Liner Sealing Ring MK-3,81.00,5,5,AegisElectro Ltd,Singapore-WH2,false
+SP-1093,Ballast Centrifugal Impeller MK-4,915.00,1,11,NordicMarine Supply,Hamburg-WH3,false
+SP-1094,High-Pressure Hydraulic Valve MK-5,352.50,2,8,BalticValve GmbH,Hamburg-WH3,false
+SP-1095,Marine Lithium Battery Module MK-1,1300.00,1,17,PacificPump Co,Busan-WH4,true
+SP-1096,Refrigerant R404A Service Cylinder MK-2,257.50,2,8,AegisElectro Ltd,Busan-WH4,true
+SP-1097,Bilge Oily-Water Sensor Probe MK-3,335.00,2,10,NordicMarine Supply,Rotterdam-WH1,false
+SP-1098,Boiler Burner Igniter Assembly MK-4,145.00,4,7,BalticValve GmbH,Rotterdam-WH1,false
+SP-1099,Anti-Corrosion Zinc Anode Block MK-5,54.50,10,7,PacificPump Co,Singapore-WH2,false
+SP-1100,Synthetic Gear Oil 20L Drum MK-1,200.00,2,6,AegisElectro Ltd,Singapore-WH2,true
+SP-1101,Main Engine Fuel Injector MK-2,457.50,2,8,NordicMarine Supply,Hamburg-WH3,false
+SP-1102,Cylinder Liner Sealing Ring MK-3,118.50,5,7,BalticValve GmbH,Hamburg-WH3,false
+SP-1103,Ballast Centrifugal Impeller MK-4,952.50,1,13,PacificPump Co,Busan-WH4,false
+SP-1104,High-Pressure Hydraulic Valve MK-5,390.00,2,6,AegisElectro Ltd,Busan-WH4,false
+SP-1105,Marine Lithium Battery Module MK-1,1250.00,1,15,NordicMarine Supply,Rotterdam-WH1,true
+SP-1106,Refrigerant R404A Service Cylinder MK-2,207.50,2,10,BalticValve GmbH,Rotterdam-WH1,true
+SP-1107,Bilge Oily-Water Sensor Probe MK-3,285.00,2,12,PacificPump Co,Singapore-WH2,false
+SP-1108,Boiler Burner Igniter Assembly MK-4,182.50,4,5,AegisElectro Ltd,Singapore-WH2,false
+SP-1109,Anti-Corrosion Zinc Anode Block MK-5,92.00,10,5,NordicMarine Supply,Hamburg-WH3,false
+SP-1110,Synthetic Gear Oil 20L Drum MK-1,237.50,2,8,BalticValve GmbH,Hamburg-WH3,true
+SP-1111,Main Engine Fuel Injector MK-2,495.00,2,10,PacificPump Co,Busan-WH4,false
+SP-1112,Cylinder Liner Sealing Ring MK-3,68.50,5,5,AegisElectro Ltd,Busan-WH4,false
+SP-1113,Ballast Centrifugal Impeller MK-4,902.50,1,11,NordicMarine Supply,Rotterdam-WH1,false
+SP-1114,High-Pressure Hydraulic Valve MK-5,340.00,2,8,BalticValve GmbH,Rotterdam-WH1,false
+SP-1115,Marine Lithium Battery Module MK-1,1287.50,1,17,PacificPump Co,Singapore-WH2,true
+SP-1116,Refrigerant R404A Service Cylinder MK-2,245.00,2,8,AegisElectro Ltd,Singapore-WH2,true
+SP-1117,Bilge Oily-Water Sensor Probe MK-3,322.50,2,10,NordicMarine Supply,Hamburg-WH3,false
+SP-1118,Boiler Burner Igniter Assembly MK-4,220.00,4,7,BalticValve GmbH,Hamburg-WH3,false
+SP-1119,Anti-Corrosion Zinc Anode Block MK-5,42.00,10,7,PacificPump Co,Busan-WH4,false
+SP-1120,Synthetic Gear Oil 20L Drum MK-1,187.50,2,6,AegisElectro Ltd,Busan-WH4,true
+SP-1121,Main Engine Fuel Injector MK-2,445.00,2,8,NordicMarine Supply,Rotterdam-WH1,false
+SP-1122,Cylinder Liner Sealing Ring MK-3,106.00,5,7,BalticValve GmbH,Rotterdam-WH1,false
+SP-1123,Ballast Centrifugal Impeller MK-4,940.00,1,13,PacificPump Co,Singapore-WH2,false
+SP-1124,High-Pressure Hydraulic Valve MK-5,377.50,2,6,AegisElectro Ltd,Singapore-WH2,false
+SP-1125,Marine Lithium Battery Module MK-1,1325.00,1,15,NordicMarine Supply,Hamburg-WH3,true
+SP-1126,Refrigerant R404A Service Cylinder MK-2,195.00,2,10,BalticValve GmbH,Hamburg-WH3,true
+SP-1127,Bilge Oily-Water Sensor Probe MK-3,272.50,2,12,PacificPump Co,Busan-WH4,false
+SP-1128,Boiler Burner Igniter Assembly MK-4,170.00,4,5,AegisElectro Ltd,Busan-WH4,false
+SP-1129,Anti-Corrosion Zinc Anode Block MK-5,79.50,10,5,NordicMarine Supply,Rotterdam-WH1,false
+SP-1130,Synthetic Gear Oil 20L Drum MK-1,225.00,2,8,BalticValve GmbH,Rotterdam-WH1,true
+SP-1131,Main Engine Fuel Injector MK-2,482.50,2,10,PacificPump Co,Singapore-WH2,false
+SP-1132,Cylinder Liner Sealing Ring MK-3,143.50,5,5,AegisElectro Ltd,Singapore-WH2,false
+SP-1133,Ballast Centrifugal Impeller MK-4,890.00,1,11,NordicMarine Supply,Hamburg-WH3,false
+SP-1134,High-Pressure Hydraulic Valve MK-5,327.50,2,8,BalticValve GmbH,Hamburg-WH3,false
+SP-1135,Marine Lithium Battery Module MK-1,1275.00,1,17,PacificPump Co,Busan-WH4,true
+SP-1136,Refrigerant R404A Service Cylinder MK-2,232.50,2,8,AegisElectro Ltd,Busan-WH4,true
+SP-1137,Bilge Oily-Water Sensor Probe MK-3,310.00,2,10,NordicMarine Supply,Rotterdam-WH1,false
+SP-1138,Boiler Burner Igniter Assembly MK-4,207.50,4,7,BalticValve GmbH,Rotterdam-WH1,false
+SP-1139,Anti-Corrosion Zinc Anode Block MK-5,117.00,10,7,PacificPump Co,Singapore-WH2,false
+SP-1140,Synthetic Gear Oil 20L Drum MK-1,175.00,2,6,AegisElectro Ltd,Singapore-WH2,true
+SP-1141,Main Engine Fuel Injector MK-2,432.50,2,8,NordicMarine Supply,Hamburg-WH3,false
+SP-1142,Cylinder Liner Sealing Ring MK-3,93.50,5,7,BalticValve GmbH,Hamburg-WH3,false
+SP-1143,Ballast Centrifugal Impeller MK-4,927.50,1,13,PacificPump Co,Busan-WH4,false
+SP-1144,High-Pressure Hydraulic Valve MK-5,365.00,2,6,AegisElectro Ltd,Busan-WH4,false
+SP-1145,Marine Lithium Battery Module MK-1,1312.50,1,15,NordicMarine Supply,Rotterdam-WH1,true
+SP-1146,Refrigerant R404A Service Cylinder MK-2,270.00,2,10,BalticValve GmbH,Rotterdam-WH1,true
+SP-1147,Bilge Oily-Water Sensor Probe MK-3,260.00,2,12,PacificPump Co,Singapore-WH2,false
+SP-1148,Boiler Burner Igniter Assembly MK-4,157.50,4,5,AegisElectro Ltd,Singapore-WH2,false
+SP-1149,Anti-Corrosion Zinc Anode Block MK-5,67.00,10,5,NordicMarine Supply,Hamburg-WH3,false
+SP-1150,Synthetic Gear Oil 20L Drum MK-1,212.50,2,8,BalticValve GmbH,Hamburg-WH3,true
+SP-1151,Main Engine Fuel Injector MK-2,470.00,2,10,PacificPump Co,Busan-WH4,false
+SP-1152,Cylinder Liner Sealing Ring MK-3,131.00,5,5,AegisElectro Ltd,Busan-WH4,false
+SP-1153,Ballast Centrifugal Impeller MK-4,965.00,1,11,NordicMarine Supply,Rotterdam-WH1,false
+SP-1154,High-Pressure Hydraulic Valve MK-5,315.00,2,8,BalticValve GmbH,Rotterdam-WH1,false
+SP-1155,Marine Lithium Battery Module MK-1,1262.50,1,17,PacificPump Co,Singapore-WH2,true
+SP-1156,Refrigerant R404A Service Cylinder MK-2,220.00,2,8,AegisElectro Ltd,Singapore-WH2,true
+SP-1157,Bilge Oily-Water Sensor Probe MK-3,297.50,2,10,NordicMarine Supply,Hamburg-WH3,false
+SP-1158,Boiler Burner Igniter Assembly MK-4,195.00,4,7,BalticValve GmbH,Hamburg-WH3,false
+SP-1159,Anti-Corrosion Zinc Anode Block MK-5,104.50,10,7,PacificPump Co,Busan-WH4,false
+SP-1160,Synthetic Gear Oil 20L Drum MK-1,250.00,2,6,AegisElectro Ltd,Busan-WH4,true

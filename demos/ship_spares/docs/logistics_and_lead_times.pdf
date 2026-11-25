@@ -1,0 +1,135 @@
+%PDF-1.3
+%‚„œ”
+1 0 obj
+<<
+/Producer (pypdf)
+>>
+endobj
+2 0 obj
+<<
+/Type /Pages
+/Count 2
+/Kids [ 4 0 R 7 0 R ]
+>>
+endobj
+3 0 obj
+<<
+/Type /Catalog
+/Pages 2 0 R
+>>
+endobj
+4 0 obj
+<<
+/Type /Page
+/Resources <<
+/Font <<
+/F1 5 0 R
+>>
+>>
+/MediaBox [ 0.0 0.0 612 792 ]
+/Parent 2 0 R
+/Contents [ 6 0 R ]
+>>
+endobj
+5 0 obj
+<<
+/Type /Font
+/Subtype /Type1
+/BaseFont /Helvetica
+>>
+endobj
+6 0 obj
+<<
+/Length 695
+>>
+stream
+BT
+/F1 11 Tf
+54 740 Td
+(MARINE SPARES LOGISTICS AND LEAD-TIME RULES \(DOC SUP-02\)) Tj
+0 -15 Td
+() Tj
+0 -15 Td
+(1. Effective Lead-Time Calculation) Tj
+0 -15 Td
+(Base lead_time_days in spares_catalogue.csv measures warehouse dispatch to port) Tj
+0 -15 Td
+(gate under normal non-hazmat conditions.) Tj
+0 -15 Td
+(Add +4 calendar days for dangerous-goods documentation and customs clearance) Tj
+0 -15 Td
+(whenever hazmat_flag is true.) Tj
+0 -15 Td
+(Add +3 calendar days for inter-port consolidation when stock_location differs) Tj
+0 -15 Td
+(from the vessel's designated receiving hub.) Tj
+0 -15 Td
+(Formula: effective_lead_days = lead_time_days + \(4 if hazmat\) + \(3 if transfer\).) Tj
+0 -15 Td
+ET
+endstream
+endobj
+7 0 obj
+<<
+/Type /Page
+/Resources <<
+/Font <<
+/F1 8 0 R
+>>
+>>
+/MediaBox [ 0.0 0.0 612 792 ]
+/Parent 2 0 R
+/Contents [ 9 0 R ]
+>>
+endobj
+8 0 obj
+<<
+/Type /Font
+/Subtype /Type1
+/BaseFont /Helvetica
+>>
+endobj
+9 0 obj
+<<
+/Length 499
+>>
+stream
+BT
+/F1 11 Tf
+54 740 Td
+(2. Expedited Air Freight and Port Cutoffs) Tj
+0 -15 Td
+(Non-hazmat spares may use expedited air freight, cutting base lead_time_days) Tj
+0 -15 Td
+(by 50% \(rounded up to the nearest whole day\) for a flat USD 450 surcharge.) Tj
+0 -15 Td
+(Items with hazmat_flag=true are prohibited from standard air-freight expedite) Tj
+0 -15 Td
+(and must move via sea/dangerous-goods charter.) Tj
+0 -15 Td
+(Weekly port consolidation cutoffs close every Thursday at 16:00 UTC.) Tj
+0 -15 Td
+ET
+endstream
+endobj
+xref
+0 10
+0000000000 65535 f 
+0000000015 00000 n 
+0000000054 00000 n 
+0000000119 00000 n 
+0000000168 00000 n 
+0000000304 00000 n 
+0000000374 00000 n 
+0000001120 00000 n 
+0000001256 00000 n 
+0000001326 00000 n 
+trailer
+<<
+/Size 10
+/Root 3 0 R
+/Info 1 0 R
+>>
+startxref
+1876
+%%EOF
