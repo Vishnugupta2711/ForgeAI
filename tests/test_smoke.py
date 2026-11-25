@@ -33,6 +33,7 @@ def test_cli_help_via_runner() -> None:
     assert "generate" in result.stdout
     assert "evals" in result.stdout
     assert "judge-selftest" in result.stdout
+    assert "optimize" in result.stdout
 
 
 def test_cli_help_via_entrypoint() -> None:
