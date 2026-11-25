@@ -88,3 +88,15 @@
   - Tests in `tests/test_judge.py` and `tests/test_smoke.py`
 - **Verification**:
   - `pytest -q`, `ruff check .`, `forge evals run`, and `forge judge-selftest` passed cleanly.
+
+### Phase 7 — Critic-Optimizer Loop (`phase-7-optimizer`)
+- **Status**: Complete
+- **Deliverables**:
+  - `prompts/optimizer_classify_tie.v1.md` and `prompts/optimizer_propose_patches.v1.md`
+  - `forge.optimizer.classifier`: deterministic-first failure classifier (`retrieval_miss`, `hallucination`, `wrong_refusal` incl. `missed_refusal` subtype, `prompt_defect`) with LLM tie-breaker
+  - `forge.optimizer.patches` & `forge.optimizer.guards`: typed `RetrievalPatch` (re-indexing on `chunk_size`/`overlap`) and `PromptPatch` (touching only named sections), byte-level `verify_diff_guard()`, and n-gram/overlap `check_patch_for_leak()`
+  - `forge.optimizer.loop`: `OptimizerLoop` (max 3 iterations, dev-only iterations, category-regression rollback, 2-consecutive no-improvement & 100%-dev early stop, held-out scored only at baseline and end, per-iteration `iterations/iter_k/` artifacts and `scorecard.json`)
+  - CLI command `forge optimize --run <run_dir>`
+  - Tests in `tests/test_optimizer.py` and `tests/test_smoke.py`
+- **Verification**:
+  - `pytest -q`, `ruff check .`, and `forge optimize` CLI tests passed cleanly.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from typing import Annotated
@@ -23,6 +24,7 @@ from forge.intake import IntakeInterviewer, RequirementsDocument
 from forge.judge import EvalScorecard, Judge, JudgeReliabilityReport, run_judge_selftest
 from forge.llm.client import LLMClient
 from forge.llm.models import LLMProviderError
+from forge.optimizer import OptimizationScorecard, OptimizerLoop
 from forge.retrieval.hybrid import HybridIndex, HybridRetriever
 from forge.retrieval.models import RetrievalConfig
 from forge.tools import ToolContext
@@ -924,6 +926,95 @@ def judge_selftest(
         f"Saved -> {out / 'judge_reliability.json'} | "
         f"Overall False Pass: {report.overall_false_pass_rate * 100:.1f}% | "
         f"Overall False Fail: {report.overall_false_fail_rate * 100:.1f}%"
+    )
+
+
+def _run_optimize_pipeline(
+    *,
+    run_dir: Path,
+    docs: Path | None,
+    max_iters: int,
+    bm25_only: bool,
+    llm_client: LLMClient | None = None,
+) -> OptimizationScorecard:
+    def_path = run_dir / "definition.yaml"
+    eval_path = run_dir / "eval_set.json"
+    if not def_path.is_file():
+        raise FileNotFoundError(f"Missing definition.yaml in {run_dir}")
+    if not eval_path.is_file():
+        raise FileNotFoundError(f"Missing eval_set.json in {run_dir}")
+
+    resolved_docs = docs
+    if resolved_docs is None:
+        prof_path = run_dir / "profile.json"
+        if prof_path.is_file():
+            prof_data = json.loads(prof_path.read_text(encoding="utf-8"))
+            if root_str := prof_data.get("root_path"):
+                resolved_docs = Path(root_str)
+    if resolved_docs is None or not resolved_docs.is_dir():
+        raise FileNotFoundError(
+            "Could not resolve --docs directory from arguments or profile.json."
+        )
+
+    cfg = load_config()
+    client = llm_client or LLMClient.from_config(cfg, usage_log_path=run_dir / "usage.jsonl")
+    definition = AgentDefinition.load_yaml(def_path)
+    eval_set = EvalSet.model_validate_json(eval_path.read_text(encoding="utf-8"))
+
+    loop = OptimizerLoop(
+        client,
+        config=cfg,
+        max_iterations=max_iters,
+        bm25_only=bm25_only,
+    )
+    _, opt_scorecard = loop.run(definition, eval_set, resolved_docs, out_dir=run_dir)
+    return opt_scorecard
+
+
+@app.command()
+def optimize(
+    run: Annotated[
+        Path,
+        typer.Option(
+            "--run",
+            exists=True,
+            file_okay=False,
+            help="Run directory containing definition.yaml and eval_set.json.",
+        ),
+    ],
+    docs: Annotated[
+        Path | None,
+        typer.Option(
+            "--docs", exists=True, file_okay=False, help="Optional document folder override."
+        ),
+    ] = None,
+    max_iters: Annotated[
+        int,
+        typer.Option("--max-iters", min=1, max=3, help="Maximum optimization iterations (max 3)."),
+    ] = 3,
+    bm25_only: Annotated[
+        bool,
+        typer.Option("--bm25-only", help="Build retrieval index without dense embeddings."),
+    ] = False,
+) -> None:
+    """Run targeted critic-optimizer loop on dev evals and score held-out once at the end."""
+    opt_scorecard = _run_optimize_pipeline(
+        run_dir=run,
+        docs=docs,
+        max_iters=max_iters,
+        bm25_only=bm25_only,
+    )
+    console.print(
+        Panel(
+            f"Dev score: {opt_scorecard.baseline_dev_score * 100:.1f}% -> "
+            f"{opt_scorecard.final_dev_score * 100:.1f}%\n"
+            f"Held-out score: {opt_scorecard.baseline_held_out_score * 100:.1f}% -> "
+            f"{opt_scorecard.final_held_out_score * 100:.1f}%\n"
+            f"Iterations: {opt_scorecard.iterations_completed} | "
+            f"Stop reason: {opt_scorecard.stop_reason}",
+            title=f"Optimization Complete -> {run / 'scorecard.json'}",
+            title_align="left",
+        )
     )
 
 
