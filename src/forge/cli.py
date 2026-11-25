@@ -25,6 +25,7 @@ from forge.judge import EvalScorecard, Judge, JudgeReliabilityReport, run_judge_
 from forge.llm.client import LLMClient
 from forge.llm.models import LLMProviderError
 from forge.optimizer import OptimizationScorecard, OptimizerLoop
+from forge.pipeline import ForgePipeline, PipelineExecutionError, PipelineState
 from forge.retrieval.hybrid import HybridIndex, HybridRetriever
 from forge.retrieval.models import RetrievalConfig
 from forge.tools import ToolContext
@@ -1013,6 +1014,130 @@ def optimize(
             f"Iterations: {opt_scorecard.iterations_completed} | "
             f"Stop reason: {opt_scorecard.stop_reason}",
             title=f"Optimization Complete -> {run / 'scorecard.json'}",
+            title_align="left",
+        )
+    )
+
+
+def _run_full_pipeline_cli(
+    *,
+    brief_text: str,
+    docs: Path,
+    out_dir: Path,
+    mode: str,
+    answers_path: Path | None,
+    max_iters: int,
+    strict: bool,
+    fast: bool,
+    resume: bool,
+    bm25_only: bool,
+    llm_client: LLMClient | None = None,
+) -> PipelineState:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    cfg = load_config()
+    client = llm_client or LLMClient.from_config(cfg, usage_log_path=out_dir / "usage.jsonl")
+
+    def _progress(stage: str, status: str, elapsed: float | None) -> None:
+        if elapsed is None:
+            console.print(f"[cyan][{stage}][/cyan] {status}...")
+        else:
+            console.print(f"[green][{stage}][/green] {status} ({elapsed:.2f}s)")
+
+    pipeline = ForgePipeline(
+        client, config=cfg, bm25_only=bm25_only, progress_cb=_progress
+    )
+    return pipeline.run(
+        brief=brief_text,
+        docs_dir=docs,
+        out_dir=out_dir,
+        mode=mode,  # type: ignore[arg-type]
+        answers_path=answers_path,
+        input_fn=lambda q_prompt: console.input(f"[cyan]{q_prompt}[/cyan]"),
+        max_iters=max_iters,
+        strict=strict,
+        fast=fast,
+        resume=resume,
+    )
+
+
+@app.command()
+def run(
+    brief: Annotated[
+        str,
+        typer.Option("--brief", help="Path to a brief file or literal brief text."),
+    ],
+    docs: Annotated[
+        Path,
+        typer.Option("--docs", exists=True, file_okay=False, help="Document folder."),
+    ],
+    out: Annotated[
+        Path,
+        typer.Option("--out", help="Output run directory."),
+    ] = Path("runs/latest"),
+    auto: Annotated[
+        bool,
+        typer.Option("--auto", help="Run intake unattended with simulated requester."),
+    ] = False,
+    answers: Annotated[
+        Path | None,
+        typer.Option("--answers", exists=True, dir_okay=False, help="YAML/JSON answers file."),
+    ] = None,
+    max_iters: Annotated[
+        int,
+        typer.Option("--max-iters", min=1, max=3, help="Max optimizer iterations."),
+    ] = 3,
+    strict: Annotated[
+        bool,
+        typer.Option("--strict", help="Abort if groundability guard finds any gaps."),
+    ] = False,
+    fast: Annotated[
+        bool,
+        typer.Option("--fast", help="Use smaller eval set and lower retrieval/iter budgets."),
+    ] = False,
+    resume: Annotated[
+        bool,
+        typer.Option("--resume", help="Resume from completed stage checkpoints in --out."),
+    ] = False,
+    bm25_only: Annotated[
+        bool,
+        typer.Option("--bm25-only", help="Build retrieval index without dense embeddings."),
+    ] = False,
+) -> None:
+    """Run the full ForgeAI factory end-to-end and write report.md + scorecard.csv."""
+    if auto and answers is not None:
+        console.print("[red]Specify either --auto or --answers, not both.[/red]")
+        raise typer.Exit(code=2)
+
+    brief_path = Path(brief)
+    brief_text = brief_path.read_text(encoding="utf-8").strip() if brief_path.is_file() else brief
+    mode = "auto" if auto else ("answers" if answers is not None else "interactive")
+
+    try:
+        state = _run_full_pipeline_cli(
+            brief_text=brief_text,
+            docs=docs,
+            out_dir=out,
+            mode=mode,
+            answers_path=answers,
+            max_iters=max_iters,
+            strict=strict,
+            fast=fast,
+            resume=resume,
+            bm25_only=bm25_only,
+        )
+    except PipelineExecutionError as exc:
+        console.print(f"[red]{exc}[/red]")
+        console.print(f"[yellow]Partial report written to {out / 'report.md'}[/yellow]")
+        raise typer.Exit(code=1) from exc
+
+    console.print(
+        Panel(
+            f"Completed stages: {state.completed_stages}\n"
+            f"Total elapsed: {state.total_elapsed_seconds:.2f}s\n"
+            f"Definition: {out / 'definition.yaml'}\n"
+            f"Report: {out / 'report.md'}\n"
+            f"Scorecard CSV: {out / 'scorecard.csv'}",
+            title="ForgeAI Pipeline Complete",
             title_align="left",
         )
     )
