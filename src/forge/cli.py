@@ -15,7 +15,9 @@ from forge import __version__
 from forge.agent.runtime import AgentRuntime
 from forge.agent.schema import AgentDefinition, AnswerRecord
 from forge.config import load_config
+from forge.groundability import GroundabilityGuard, StrictGroundabilityError
 from forge.ingest.profile import ingest_folder
+from forge.intake import IntakeInterviewer, RequirementsDocument
 from forge.llm.client import LLMClient
 from forge.llm.models import LLMProviderError
 from forge.retrieval.hybrid import HybridIndex, HybridRetriever
@@ -372,6 +374,134 @@ def chat(
         _render_answer_record(record, show_trace=trace)
         history.append({"role": "user", "content": cleaned})
         history.append({"role": "assistant", "content": record.output.answer})
+
+
+def _run_intake_pipeline(
+    *,
+    brief_text: str,
+    docs: Path,
+    out_dir: Path,
+    mode: str,
+    answers_path: Path | None,
+    strict: bool,
+    bm25_only: bool,
+    llm_client: LLMClient | None = None,
+) -> RequirementsDocument:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    cfg = load_config()
+    client = llm_client or LLMClient.from_config(cfg, usage_log_path=out_dir / "usage.jsonl")
+
+    _, chunks, profile = ingest_folder(docs)
+    (out_dir / "profile.json").write_text(profile.model_dump_json(indent=2), encoding="utf-8")
+
+    if bm25_only:
+        index = HybridIndex.build(chunks, llm_client=None)
+    else:
+        try:
+            index = HybridIndex.build(chunks, llm_client=client)
+        except LLMProviderError as exc:
+            console.print(
+                f"[yellow]Embedding provider unavailable ({exc}); "
+                "building BM25-only index for groundability.[/yellow]"
+            )
+            index = HybridIndex.build(chunks, llm_client=None)
+    index.save(out_dir / "index")
+
+    interviewer = IntakeInterviewer(client)
+    raw_req = interviewer.run(
+        brief_text,
+        profile,
+        mode=mode,  # type: ignore[arg-type]
+        answers_path=answers_path,
+        input_fn=lambda q_prompt: console.input(f"[cyan]{q_prompt}[/cyan]"),
+    )
+
+    guard = GroundabilityGuard(index, client)
+    try:
+        verified_req, _ = guard.evaluate(raw_req, strict=strict)
+    except StrictGroundabilityError as exc:
+        if exc.requirements is not None:
+            exc.requirements.save(out_dir)
+        raise
+
+    verified_req.save(out_dir)
+    return verified_req
+
+
+@app.command()
+def intake(
+    brief: Annotated[
+        str,
+        typer.Option("--brief", help="Path to a brief file or literal brief text."),
+    ],
+    docs: Annotated[
+        Path,
+        typer.Option("--docs", exists=True, file_okay=False, help="Document folder."),
+    ],
+    auto: Annotated[
+        bool,
+        typer.Option("--auto", help="Simulate requester answers from brief + docs."),
+    ] = False,
+    answers: Annotated[
+        Path | None,
+        typer.Option("--answers", exists=True, dir_okay=False, help="YAML/JSON answers file."),
+    ] = None,
+    strict: Annotated[
+        bool,
+        typer.Option("--strict", help="Abort if any topic has a groundability gap."),
+    ] = False,
+    out: Annotated[
+        Path,
+        typer.Option("--out", help="Output directory for requirements.json and requirements.md."),
+    ] = Path("runs/intake"),
+    bm25_only: Annotated[
+        bool,
+        typer.Option("--bm25-only", help="Build index without dense embedding calls."),
+    ] = False,
+) -> None:
+    """Run clarifying intake and groundability guard to produce requirements.json/.md."""
+    if auto and answers is not None:
+        console.print("[red]Specify either --auto or --answers, not both.[/red]")
+        raise typer.Exit(code=2)
+
+    brief_path = Path(brief)
+    brief_text = brief_path.read_text(encoding="utf-8").strip() if brief_path.is_file() else brief
+    mode = "auto" if auto else ("answers" if answers is not None else "interactive")
+
+    try:
+        req = _run_intake_pipeline(
+            brief_text=brief_text,
+            docs=docs,
+            out_dir=out,
+            mode=mode,
+            answers_path=answers,
+            strict=strict,
+            bm25_only=bm25_only,
+        )
+    except StrictGroundabilityError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    rep = req.groundability_report
+    console.print(
+        Panel(
+            f"Scope: {req.scope}\n"
+            f"Must answer: {len(req.must_answer_topics)} | "
+            f"Must refuse: {len(req.must_refuse_topics)} | "
+            f"Assumptions: {len(req.assumptions)}",
+            title=f"Requirements Saved -> {out}",
+            title_align="left",
+        )
+    )
+    if rep is not None:
+        console.print(
+            f"Groundability: {rep.supported_count} SUPPORTED, "
+            f"{rep.partial_count} PARTIAL, {rep.unsupported_count} UNSUPPORTED"
+        )
+        if rep.has_gaps:
+            console.print("[yellow]Flagged groundability gaps:[/yellow]")
+            for gap in rep.flagged_gaps:
+                console.print(f"  - {gap}")
 
 
 if __name__ == "__main__":

@@ -45,3 +45,13 @@
   - `fixtures/hand_agent.yaml` and `fixtures/docs/` plus unit/CLI tests in `tests/test_agent_schema.py`, `tests/test_tools.py`, `tests/test_agent_runtime.py`, and `tests/test_smoke.py`
 - **Verification**:
   - `pytest -q`, `ruff check .`, and `forge chat` end-to-end checks passed cleanly.
+
+### Phase 3 — Intake & Groundability Guard (`phase-3-intake-groundability`)
+- **Status**: Complete
+- **Deliverables**:
+  - `forge.intake`: `IntakeInterviewer` (`prompts/intake_questions.v1.md`, `prompts/intake_auto_answer.v1.md`, `prompts/intake_synthesize.v1.md`) supporting `interactive`, `--answers`, and `--auto` (with every auto answer recorded under `assumptions`), strict `<= 5` question cap enforced in code, and `RequirementsDocument` (`requirements.json` + `requirements.md`)
+  - `forge.groundability`: `GroundabilityGuard` (`prompts/groundability_decompose.v1.md`, `prompts/groundability_verify.v1.md`) decomposing topics/capabilities, computing deterministic coverage (`key_term_overlap` + retrieval score), verifying returned quotes as real chunk substrings (downgrading unverified/common-knowledge/absent topics to `UNSUPPORTED`), moving gaps to `must_refuse`, narrowing scope on `PARTIAL`, and supporting `--strict`
+  - CLI command `forge intake --brief ... --docs ... [--auto|--answers] [--strict] --out ...`
+  - Tests in `tests/test_intake_groundability.py` and `tests/test_smoke.py`
+- **Verification**:
+  - `pytest -q`, `ruff check .`, and `forge intake` CLI tests passed cleanly.
