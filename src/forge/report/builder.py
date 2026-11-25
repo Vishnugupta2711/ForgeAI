@@ -355,6 +355,8 @@ def build_report(
             f"- **Models**: `{models_str}`",
             f"- **Seed**: `{seed_val}`",
             f"- **Fast Mode**: `{state.get('fast_mode', False)}`",
+            f"- **Time Budget (min)**: `{state.get('time_budget_min', 'none')}` "
+            f"(degraded=`{state.get('time_budget_degraded', False)}`)",
             f"- **Total Elapsed Seconds**: `{state.get('total_elapsed_seconds', 0.0)}`",
             f"- **Stage Timings (s)**: `{json.dumps(state.get('stage_timings_seconds', {}))}`",
             (
@@ -363,9 +365,13 @@ def build_report(
                 f"completion=`{usage_data['completion_tokens']}`, "
                 f"calls=`{usage_data['calls']}`, cache_hits=`{usage_data['cache_hits']}`)"
             ),
-            "",
         ]
     )
+    if state.get("time_budget_notes"):
+        lines.append("- **Time Budget Degradation Notes**:")
+        for note in state["time_budget_notes"]:
+            lines.append(f"  - {note}")
+    lines.append("")
 
     # 2. Requirements & Groundability Flags (shown up front)
     lines.append("## 2. Requirements & Groundability Flags")

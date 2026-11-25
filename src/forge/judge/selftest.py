@@ -362,12 +362,13 @@ def run_judge_selftest(
     *,
     eval_set: EvalSet | None = None,
     config: ForgeConfig | None = None,
+    max_answer_bases: int = 2,
     out_path: Path | str | None = None,
 ) -> JudgeReliabilityReport:
     """Execute the canary suite against Judge and report false-pass / false-fail rates."""
     cfg = config or llm_client.config
     judge = Judge(llm_client, config=cfg)
-    canaries = build_canary_suite(eval_set, chunk_map)
+    canaries = build_canary_suite(eval_set, chunk_map, max_answer_bases=max_answer_bases)
 
     case_results: list[CanaryCaseResult] = []
     grouped: dict[str, list[CanaryCaseResult]] = {}

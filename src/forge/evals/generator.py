@@ -526,11 +526,6 @@ class EvalGenerator:
     ) -> EvalSet:
         """Generate, verify, deduplicate, and split an EvalSet from corpus chunks."""
         resolved_seed = self.config.generation.seed if seed is None else seed
-        has_tools = len(definition.tools) > 0
-        target_quotas = dict(quotas) if quotas is not None else default_category_quotas(has_tools)
-        if not has_tools:
-            target_quotas["tool_use"] = 0
-
         chunks = list(index.chunks)
         chunk_map = {c.chunk_id: c for c in chunks}
         corpus_docs = {c.doc_id for c in chunks}
@@ -553,6 +548,34 @@ class EvalGenerator:
         elif len(chunks) >= 2:
             for i in range(len(chunks) - 1):
                 chunk_pairs.append((chunks[i], chunks[i + 1]))
+
+        has_tools = len(definition.tools) > 0
+        scaled_note: str | None = None
+        if quotas is not None:
+            target_quotas = dict(quotas)
+        else:
+            base_quotas = default_category_quotas(has_tools)
+            total_chars = sum(len(c.text) for c in chunks)
+            if len(chunks) < 5 or total_chars < 1000:
+                target_quotas = {
+                    "single_doc": min(base_quotas["single_doc"], max(2, len(chunks) * 2)),
+                    "multi_doc": min(base_quotas["multi_doc"], len(chunk_pairs) * 2),
+                    "out_of_scope": min(
+                        base_quotas["out_of_scope"],
+                        max(3, len(requirements.must_refuse_topics) + 2),
+                    ),
+                    "edge_case": min(base_quotas["edge_case"], max(2, len(chunks))),
+                    "tool_use": min(base_quotas["tool_use"], 2) if has_tools else 0,
+                }
+                scaled_note = (
+                    f"Short corpus ({len(chunks)} chunks, {total_chars} chars): "
+                    f"eval quotas scaled gracefully from {sum(base_quotas.values())} "
+                    f"to {sum(target_quotas.values())} cases."
+                )
+            else:
+                target_quotas = base_quotas
+        if not has_tools:
+            target_quotas["tool_use"] = 0
 
         accepted_by_cat: dict[EvalCategory, list[EvalCase]] = {
             "single_doc": [],
@@ -690,6 +713,7 @@ class EvalGenerator:
             dev_category_counts=_count_by_cat(dev_cases),
             held_out_category_counts=_count_by_cat(held_out_cases),
             rejected_counts_by_reason=rej_counts,
+            scaled_quotas_note=scaled_note,
         )
 
         if out_dir is not None:
