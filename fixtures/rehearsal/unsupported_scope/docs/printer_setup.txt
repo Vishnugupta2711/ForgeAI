@@ -1,0 +1,3 @@
+OFFICE PRINTER SETUP
+Connect to wireless network CORP-PRINT and select queue Floor3-Duplex-BW.
+Default driver uses duplex monochrome printing at 600 DPI; color jobs require PIN code 4410.

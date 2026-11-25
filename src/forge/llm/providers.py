@@ -40,10 +40,14 @@ class OllamaProvider:
         self,
         base_url: str = "http://localhost:11434",
         timeout_seconds: float = 120.0,
+        max_http_retries: int = 2,
+        backoff_seconds: float = 0.5,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
+        self.max_http_retries = max_http_retries
+        self.backoff_seconds = backoff_seconds
         self._transport = transport
 
     def _client(self) -> httpx.Client:
@@ -52,6 +56,37 @@ class OllamaProvider:
             timeout=self.timeout_seconds,
             transport=self._transport,
         )
+
+    def _post_with_backoff(
+        self, client: httpx.Client, path: str, payload: dict[str, Any], *, model: str
+    ) -> httpx.Response:
+        last_exc: Exception | None = None
+        for attempt in range(self.max_http_retries + 1):
+            try:
+                resp = client.post(path, json=payload)
+                if resp.status_code in {429, 502, 503, 504} and attempt < self.max_http_retries:
+                    time.sleep(self.backoff_seconds * (2**attempt))
+                    continue
+                return resp
+            except httpx.ConnectError as exc:
+                raise LLMProviderError(
+                    f"Cannot connect to Ollama at {self.base_url}. "
+                    f"Ensure Ollama is running ('ollama serve') and pull '{model}' "
+                    f"('ollama pull {model}'), or configure an OpenAI-compatible "
+                    "endpoint in forge.toml / .env."
+                ) from exc
+            except httpx.TimeoutException as exc:
+                last_exc = exc
+                if attempt < self.max_http_retries:
+                    time.sleep(self.backoff_seconds * (2**attempt))
+                    continue
+                raise LLMProviderError(
+                    f"Ollama request to {path} timed out after {self.timeout_seconds}s "
+                    f"({exc}). Try increasing timeout_seconds in forge.toml or using --fast."
+                ) from exc
+            except httpx.HTTPError as exc:
+                raise LLMProviderError(f"Ollama request failed: {exc}") from exc
+        raise LLMProviderError(f"Ollama request failed after retries: {last_exc}")
 
     def chat(
         self,
@@ -78,9 +113,11 @@ class OllamaProvider:
         start = time.perf_counter()
         try:
             with self._client() as client:
-                resp = client.post("/api/chat", json=payload)
+                resp = self._post_with_backoff(client, "/api/chat", payload, model=model)
                 resp.raise_for_status()
                 data = resp.json()
+        except LLMProviderError:
+            raise
         except httpx.HTTPError as exc:
             raise LLMProviderError(f"Ollama chat request failed: {exc}") from exc
 
@@ -107,14 +144,18 @@ class OllamaProvider:
         start = time.perf_counter()
         try:
             with self._client() as client:
-                resp = client.post("/api/embed", json={"model": model, "input": texts})
+                resp = self._post_with_backoff(
+                    client, "/api/embed", {"model": model, "input": texts}, model=model
+                )
                 if resp.status_code == 404:
                     # Fallback for older Ollama servers supporting only /api/embeddings
                     vectors: list[list[float]] = []
                     for text in texts:
-                        legacy = client.post(
+                        legacy = self._post_with_backoff(
+                            client,
                             "/api/embeddings",
-                            json={"model": model, "prompt": text},
+                            {"model": model, "prompt": text},
+                            model=model,
                         )
                         legacy.raise_for_status()
                         vectors.append([float(x) for x in legacy.json()["embedding"]])
@@ -127,6 +168,8 @@ class OllamaProvider:
                     )
                 resp.raise_for_status()
                 data = resp.json()
+        except LLMProviderError:
+            raise
         except httpx.HTTPError as exc:
             raise LLMProviderError(f"Ollama embed request failed: {exc}") from exc
 

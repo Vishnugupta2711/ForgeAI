@@ -1,0 +1,1 @@
+We need an internal IT helpdesk assistant for employees covering VPN setup, multi-factor authentication, laptop onboarding steps, and password reset SLAs.

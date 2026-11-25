@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from collections import Counter
 from pathlib import Path
 
@@ -293,6 +294,7 @@ class OptimizerLoop:
         docs_dir: Path | str,
         *,
         out_dir: Path | str,
+        deadline_monotonic: float | None = None,
     ) -> tuple[AgentDefinition, OptimizationScorecard]:
         """Optimize definition on dev_cases only; score held_out at baseline and end."""
         out_path = Path(out_dir)
@@ -340,6 +342,9 @@ class OptimizerLoop:
         stop_reason = f"max_iterations ({self.max_iterations}) reached"
 
         for iter_idx in range(1, self.max_iterations + 1):
+            if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                stop_reason = "time_budget_exceeded"
+                break
             failures = classify_failures(
                 eval_set.dev_cases,
                 current_dev_scorecard.results,

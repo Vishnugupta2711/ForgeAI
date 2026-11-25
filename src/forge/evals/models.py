@@ -69,6 +69,7 @@ class EvalSet(BaseModel):
     dev_category_counts: dict[str, int] = Field(default_factory=dict)
     held_out_category_counts: dict[str, int] = Field(default_factory=dict)
     rejected_counts_by_reason: dict[str, int] = Field(default_factory=dict)
+    scaled_quotas_note: str | None = None
 
     @property
     def total_cases(self) -> int:
@@ -90,11 +91,17 @@ class EvalSet(BaseModel):
                 f"(dev=`{len(self.dev_cases)}`, held_out=`{len(self.held_out_cases)}`)"
             ),
             f"- **Total Rejected Candidates**: `{len(self.rejected_cases)}`",
-            "",
-            "## Category Counts",
-            "| Category | Total | Dev | Held-Out |",
-            "| --- | ---: | ---: | ---: |",
         ]
+        if self.scaled_quotas_note:
+            lines.append(f"- **Quota Scaling Note**: {self.scaled_quotas_note}")
+        lines.extend(
+            [
+                "",
+                "## Category Counts",
+                "| Category | Total | Dev | Held-Out |",
+                "| --- | ---: | ---: | ---: |",
+            ]
+        )
         all_cats = sorted(
             set(self.category_counts)
             | set(self.dev_category_counts)

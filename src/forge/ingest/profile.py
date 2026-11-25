@@ -5,7 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from forge.ingest.chunking import chunk_documents, extract_headings
-from forge.ingest.loaders import load_documents
+from forge.ingest.loaders import (
+    DEFAULT_MAX_DOC_CHARS,
+    DEFAULT_MAX_FILE_BYTES,
+    load_documents,
+)
 from forge.ingest.models import (
     Chunk,
     CorpusProfile,
@@ -78,9 +82,13 @@ def ingest_folder(
     *,
     chunk_size: int = 800,
     overlap: int = 120,
+    max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
+    max_doc_chars: int = DEFAULT_MAX_DOC_CHARS,
 ) -> tuple[IngestResult, list[Chunk], CorpusProfile]:
     """Load, chunk, and profile a document folder in one call."""
-    ingest_result = load_documents(folder)
+    ingest_result = load_documents(
+        folder, max_file_bytes=max_file_bytes, max_doc_chars=max_doc_chars
+    )
     chunks = chunk_documents(
         ingest_result.documents,
         chunk_size=chunk_size,

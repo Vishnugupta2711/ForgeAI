@@ -72,6 +72,9 @@ class PipelineState(BaseModel):
     fast_mode: bool = False
     strict: bool = False
     max_iters: int = 3
+    time_budget_min: float | None = None
+    time_budget_degraded: bool = False
+    time_budget_notes: list[str] = Field(default_factory=list)
     completed_stages: list[str] = Field(default_factory=list)
     stage_timings_seconds: dict[str, float] = Field(default_factory=dict)
     failed_stage: str | None = None
@@ -139,6 +142,7 @@ class ForgePipeline:
         strict: bool = False,
         fast: bool = False,
         resume: bool = False,
+        time_budget_min: float | None = None,
         stage_hooks: dict[str, Callable[[], None]] | None = None,
     ) -> PipelineState:
         """Execute the full resumable factory pipeline with partial report on failure."""
@@ -147,6 +151,11 @@ class ForgePipeline:
         docs_path = Path(docs_dir).resolve()
         hooks = stage_hooks or {}
         t_start = time.perf_counter()
+        deadline_mono = (
+            time.monotonic() + (time_budget_min * 60.0)
+            if time_budget_min is not None and time_budget_min > 0
+            else None
+        )
 
         resolved_max_iters = min(max_iters, 2) if fast else min(3, max(1, max_iters))
         state_file = out_path / "pipeline_state.json"
@@ -155,6 +164,8 @@ class ForgePipeline:
             state = PipelineState.model_validate_json(state_file.read_text(encoding="utf-8"))
             state.failed_stage = None
             state.error = None
+            if time_budget_min is not None:
+                state.time_budget_min = time_budget_min
         else:
             state = PipelineState(
                 brief=brief,
@@ -163,6 +174,7 @@ class ForgePipeline:
                 fast_mode=fast,
                 strict=strict,
                 max_iters=resolved_max_iters,
+                time_budget_min=time_budget_min,
             )
             state.save(out_path)
 
@@ -318,7 +330,16 @@ class ForgePipeline:
                 s_t0 = time.perf_counter()
                 if "evals" in hooks:
                     hooks["evals"]()
-                quotas = _fast_quotas(bool(definition.tools)) if fast else None
+                use_fast_evals = fast
+                if deadline_mono is not None:
+                    rem = deadline_mono - time.monotonic()
+                    if rem < max(30.0, (time_budget_min or 0.0) * 60.0 * 0.5):
+                        use_fast_evals = True
+                        state.time_budget_degraded = True
+                        state.time_budget_notes.append(
+                            f"Before evals ({rem:.1f}s remaining): degraded to compact eval set."
+                        )
+                quotas = _fast_quotas(bool(definition.tools)) if use_fast_evals else None
                 eval_gen = EvalGenerator(self.llm_client, config=self.config)
                 eval_set = eval_gen.generate(
                     definition,
@@ -347,11 +368,13 @@ class ForgePipeline:
                 if "judge_selftest" in hooks:
                     hooks["judge_selftest"]()
                 chunk_map = {c.chunk_id: c for c in index.chunks}
+                max_bases = 1 if (fast or state.time_budget_degraded) else 2
                 run_judge_selftest(
                     self.llm_client,
                     chunk_map,
                     eval_set=eval_set,
                     config=self.config,
+                    max_answer_bases=max_bases,
                     out_path=out_path / "judge_reliability.json",
                 )
                 elapsed = round(time.perf_counter() - s_t0, 3)
@@ -369,10 +392,26 @@ class ForgePipeline:
                 s_t0 = time.perf_counter()
                 if "optimize" in hooks:
                     hooks["optimize"]()
+                opt_iters = resolved_max_iters
+                if deadline_mono is not None:
+                    rem = deadline_mono - time.monotonic()
+                    if rem <= 10.0:
+                        opt_iters = 0
+                        state.time_budget_degraded = True
+                        state.time_budget_notes.append(
+                            f"Before optimize ({rem:.1f}s remaining): "
+                            "skipped optimization iterations."
+                        )
+                    elif rem < max(45.0, (time_budget_min or 0.0) * 60.0 * 0.4) and opt_iters > 1:
+                        opt_iters = 1
+                        state.time_budget_degraded = True
+                        state.time_budget_notes.append(
+                            f"Before optimize ({rem:.1f}s remaining): capped iterations to 1."
+                        )
                 opt = OptimizerLoop(
                     self.llm_client,
                     config=self.config,
-                    max_iterations=resolved_max_iters,
+                    max_iterations=opt_iters,
                     bm25_only=self.bm25_only,
                 )
                 best_def, _ = opt.run(
@@ -380,6 +419,7 @@ class ForgePipeline:
                     eval_set,
                     docs_path,
                     out_dir=out_path,
+                    deadline_monotonic=deadline_mono,
                 )
                 # Keep <out_dir>/definition.yaml pointing to the final best definition
                 best_def.save_yaml(out_path / "definition.yaml")
@@ -442,6 +482,7 @@ def run_factory(
     strict: bool = False,
     fast: bool = False,
     resume: bool = False,
+    time_budget_min: float | None = None,
     bm25_only: bool = False,
     llm_client: LLMClient | None = None,
 ) -> PipelineState:
@@ -460,4 +501,5 @@ def run_factory(
         strict=strict,
         fast=fast,
         resume=resume,
+        time_budget_min=time_budget_min,
     )
