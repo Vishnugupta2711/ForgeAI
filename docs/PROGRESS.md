@@ -100,3 +100,15 @@
   - Tests in `tests/test_optimizer.py` and `tests/test_smoke.py`
 - **Verification**:
   - `pytest -q`, `ruff check .`, and `forge optimize` CLI tests passed cleanly.
+
+### Phase 8 — End-to-End Resumable Pipeline & Report (`phase-8-pipeline-report`)
+- **Status**: Complete
+- **Deliverables**:
+  - `prompts/report_diagnosis.v1.md`
+  - `forge.report.lint`: `collect_allowed_numbers()` + `lint_narrative_numbers()` verifying every number in LLM failure diagnosis prose exists in real result files and cites valid case IDs
+  - `forge.report.builder`: `build_report()` writing `report.md` (run summary, requirements & groundability flags up front, tool gate audit, per-iteration dev scorecard + final held-out Wilson intervals, failure counts, "What Still Fails and Why", judge reliability + same-model warning, suspicion rule, limitations) and `scorecard.csv`
+  - `forge.pipeline`: `ForgePipeline` orchestrating `ingest -> intake -> groundability -> generate -> evals -> judge_selftest -> optimize -> report` with disk checkpoints (`pipeline_state.json`), `--resume`, `--fast`, live stage timings, and partial `report.md` on mid-run failure
+  - CLI command `forge run --brief ... --docs ... --out ... [--auto|--answers] [--max-iters] [--strict] [--fast] [--resume]`
+  - Tests in `tests/test_pipeline_report.py` and `tests/test_smoke.py`
+- **Verification**:
+  - `pytest -q`, `ruff check .`, `forge run`, and `forge chat` on generated `definition.yaml` passed cleanly.
