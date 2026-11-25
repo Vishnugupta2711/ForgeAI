@@ -1,0 +1,7 @@
+1. Telemetry Overview
+All remote weather buoys transmit packet bundles every 15 minutes over VHF channel 4.
+Each packet includes barometric pressure, sea-surface temperature, and battery voltage.
+
+2. Calibration Schedule
+Sensors undergo salt-fog calibration every 90 days at Depot North.
+Technicians must log probe drift before replacing any thermistor assembly.
