@@ -14,16 +14,32 @@ from forge.ingest.models import CsvSchemaProfile, Document, IngestResult, PageCo
 
 SUPPORTED_EXTENSIONS = {".txt", ".md", ".pdf", ".docx", ".csv", ".xlsx"}
 _IGNORED_FILENAMES = {".DS_Store", "Thumbs.db"}
+DEFAULT_MAX_FILE_BYTES = 2_000_000
+DEFAULT_MAX_DOC_CHARS = 300_000
+DEFAULT_MAX_CSV_ROWS = 5_000
 
 
-def _read_text_with_fallback(path: Path) -> str:
+def _read_text_with_fallback(
+    path: Path, *, max_bytes: int = DEFAULT_MAX_FILE_BYTES
+) -> tuple[str, bool]:
     raw = path.read_bytes()
+    truncated_bytes = False
+    if len(raw) > max_bytes:
+        raw = raw[:max_bytes]
+        truncated_bytes = True
+
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return raw.decode("utf-16", errors="replace"), truncated_bytes
+
     if b"\x00" in raw:
         raise ValueError("Binary null bytes detected in text file.")
-    try:
-        return raw.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        return raw.decode("latin-1")
+
+    for encoding in ("utf-8-sig", "cp1252", "latin-1"):
+        try:
+            return raw.decode(encoding), truncated_bytes
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="replace"), truncated_bytes
 
 
 def _infer_dtype(values: list[str]) -> str:
@@ -47,25 +63,46 @@ def _infer_dtype(values: list[str]) -> str:
     return "str"
 
 
-def _load_pdf(path: Path, rel_path: str, size_bytes: int) -> tuple[Document | None, str | None]:
+def _load_pdf(
+    path: Path,
+    rel_path: str,
+    size_bytes: int,
+    *,
+    max_doc_chars: int = DEFAULT_MAX_DOC_CHARS,
+) -> tuple[Document | None, list[str]]:
+    warnings: list[str] = []
     try:
         reader = PdfReader(str(path))
     except Exception as exc:
-        return None, f"Unreadable PDF '{rel_path}': {exc}"
+        return None, [f"Unreadable PDF '{rel_path}': {exc}"]
 
     pages: list[PageContent] = []
+    total_chars = 0
+    truncated = False
     for idx, page in enumerate(reader.pages, start=1):
         try:
             text = (page.extract_text() or "").strip()
         except Exception as exc:
-            return None, f"Failed extracting page {idx} of PDF '{rel_path}': {exc}"
+            return None, [f"Failed extracting page {idx} of PDF '{rel_path}': {exc}"]
+        if total_chars + len(text) > max_doc_chars:
+            remaining = max(0, max_doc_chars - total_chars)
+            if remaining > 0:
+                pages.append(PageContent(page_number=idx, text=text[:remaining]))
+            truncated = True
+            break
         pages.append(PageContent(page_number=idx, text=text))
+        total_chars += len(text)
 
     combined = "\n\n".join(p.text for p in pages if p.text).strip()
     if not combined:
-        return None, (
+        return None, [
             f"Scanned or empty PDF (no extractable text) '{rel_path}' "
             f"({len(reader.pages)} pages)."
+        ]
+
+    if truncated:
+        warnings.append(
+            f"Large PDF '{rel_path}' ({size_bytes} B) truncated at {max_doc_chars} characters."
         )
 
     doc = Document(
@@ -74,9 +111,13 @@ def _load_pdf(path: Path, rel_path: str, size_bytes: int) -> tuple[Document | No
         type="pdf",
         text=combined,
         pages=pages,
-        metadata={"size_bytes": size_bytes, "page_count": len(pages)},
+        metadata={
+            "size_bytes": size_bytes,
+            "page_count": len(pages),
+            "truncated": truncated,
+        },
     )
-    return doc, None
+    return doc, warnings
 
 
 def _load_docx(path: Path, rel_path: str, size_bytes: int) -> tuple[Document | None, str | None]:
@@ -141,22 +182,43 @@ def _load_docx(path: Path, rel_path: str, size_bytes: int) -> tuple[Document | N
     return doc, None
 
 
-def _load_csv(path: Path, rel_path: str, size_bytes: int) -> tuple[Document | None, str | None]:
+def _detect_csv_delimiter(sample: str) -> str:
     try:
-        raw_text = _read_text_with_fallback(path)
+        dialect = csv.Sniffer().sniff(sample[:4096], delimiters=",;\t|")
+        return dialect.delimiter
+    except csv.Error:
+        return ","
+
+
+def _load_csv(
+    path: Path,
+    rel_path: str,
+    size_bytes: int,
+    *,
+    max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
+    max_rows: int = DEFAULT_MAX_CSV_ROWS,
+) -> tuple[Document | None, list[str]]:
+    warnings: list[str] = []
+    try:
+        raw_text, truncated_bytes = _read_text_with_fallback(path, max_bytes=max_file_bytes)
     except Exception as exc:
-        return None, f"Unreadable CSV '{rel_path}': {exc}"
+        return None, [f"Unreadable CSV '{rel_path}': {exc}"]
 
     if not raw_text.strip():
-        return None, f"Empty CSV file '{rel_path}'."
+        return None, [f"Empty CSV file '{rel_path}'."]
 
-    reader = csv.DictReader(io.StringIO(raw_text))
+    delimiter = _detect_csv_delimiter(raw_text)
+    reader = csv.DictReader(io.StringIO(raw_text), delimiter=delimiter)
     if not reader.fieldnames:
-        return None, f"CSV file '{rel_path}' has no header columns."
+        return None, [f"CSV file '{rel_path}' has no header columns."]
 
     columns = [c.strip() if c is not None else "" for c in reader.fieldnames]
     rows: list[dict[str, str]] = []
+    truncated_rows = False
     for raw_row in reader:
+        if len(rows) >= max_rows:
+            truncated_rows = True
+            break
         cleaned = {
             (k.strip() if k is not None else f"col_{idx}"): ("" if v is None else str(v).strip())
             for idx, (k, v) in enumerate(raw_row.items())
@@ -166,7 +228,12 @@ def _load_csv(path: Path, rel_path: str, size_bytes: int) -> tuple[Document | No
             rows.append(cleaned)
 
     if not rows:
-        return None, f"CSV file '{rel_path}' contains headers but 0 data rows."
+        return None, [f"CSV file '{rel_path}' contains headers but 0 data rows."]
+
+    if truncated_bytes or truncated_rows:
+        warnings.append(
+            f"Large CSV '{rel_path}' ({size_bytes} B) capped at {len(rows)} rows."
+        )
 
     dtypes = {col: _infer_dtype([row.get(col, "") for row in rows]) for col in columns}
     profile = CsvSchemaProfile(
@@ -189,9 +256,11 @@ def _load_csv(path: Path, rel_path: str, size_bytes: int) -> tuple[Document | No
             "size_bytes": size_bytes,
             "csv_profile": profile.model_dump(),
             "rows": rows,
+            "delimiter": delimiter,
+            "truncated": truncated_bytes or truncated_rows,
         },
     )
-    return doc, None
+    return doc, warnings
 
 
 def _col_ref_to_index(ref: str) -> int:
@@ -272,7 +341,12 @@ def _load_xlsx(path: Path, rel_path: str, size_bytes: int) -> tuple[Document | N
     return doc, None
 
 
-def load_documents(folder: Path | str) -> IngestResult:
+def load_documents(
+    folder: Path | str,
+    *,
+    max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
+    max_doc_chars: int = DEFAULT_MAX_DOC_CHARS,
+) -> IngestResult:
     """Recursively load supported documents from a folder without crashing on bad files."""
     root = Path(folder).resolve()
     if not root.exists() or not root.is_dir():
@@ -307,7 +381,8 @@ def load_documents(folder: Path | str) -> IngestResult:
 
         if ext in {".txt", ".md"}:
             try:
-                text = _read_text_with_fallback(path).strip()
+                text_raw, trunc_bytes = _read_text_with_fallback(path, max_bytes=max_file_bytes)
+                text = text_raw.strip()
             except Exception as exc:
                 warnings.append(f"Unreadable text file '{rel_path}': {exc}")
                 skipped += 1
@@ -316,19 +391,31 @@ def load_documents(folder: Path | str) -> IngestResult:
                 warnings.append(f"Empty text file '{rel_path}' skipped.")
                 skipped += 1
                 continue
+            trunc_chars = len(text) > max_doc_chars
+            if trunc_chars:
+                text = text[:max_doc_chars]
+            if trunc_bytes or trunc_chars:
+                warnings.append(
+                    f"Large text file '{rel_path}' ({size_bytes} B) truncated to "
+                    f"{len(text)} chars."
+                )
             documents.append(
                 Document(
                     doc_id=rel_path,
                     path=str(path),
                     type=ext.lstrip("."),
                     text=text,
-                    metadata={"size_bytes": size_bytes},
+                    metadata={
+                        "size_bytes": size_bytes,
+                        "truncated": trunc_bytes or trunc_chars,
+                    },
                 )
             )
         elif ext == ".pdf":
-            doc, warn = _load_pdf(path, rel_path, size_bytes)
-            if warn:
-                warnings.append(warn)
+            doc, pdf_warnings = _load_pdf(
+                path, rel_path, size_bytes, max_doc_chars=max_doc_chars
+            )
+            warnings.extend(pdf_warnings)
             if doc is None:
                 skipped += 1
             else:
@@ -340,11 +427,19 @@ def load_documents(folder: Path | str) -> IngestResult:
             if doc is None:
                 skipped += 1
             else:
+                if len(doc.text) > max_doc_chars:
+                    doc.text = doc.text[:max_doc_chars]
+                    doc.metadata["truncated"] = True
+                    warnings.append(
+                        f"Large DOCX '{rel_path}' ({size_bytes} B) truncated to "
+                        f"{max_doc_chars} chars."
+                    )
                 documents.append(doc)
         elif ext == ".csv":
-            doc, warn = _load_csv(path, rel_path, size_bytes)
-            if warn:
-                warnings.append(warn)
+            doc, csv_warnings = _load_csv(
+                path, rel_path, size_bytes, max_file_bytes=max_file_bytes
+            )
+            warnings.extend(csv_warnings)
             if doc is None:
                 skipped += 1
             else:
@@ -356,6 +451,13 @@ def load_documents(folder: Path | str) -> IngestResult:
             if doc is None:
                 skipped += 1
             else:
+                if len(doc.text) > max_doc_chars:
+                    doc.text = doc.text[:max_doc_chars]
+                    doc.metadata["truncated"] = True
+                    warnings.append(
+                        f"Large XLSX '{rel_path}' ({size_bytes} B) truncated to "
+                        f"{max_doc_chars} chars."
+                    )
                 documents.append(doc)
 
     return IngestResult(

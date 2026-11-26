@@ -1030,6 +1030,7 @@ def _run_full_pipeline_cli(
     strict: bool,
     fast: bool,
     resume: bool,
+    time_budget_min: float | None,
     bm25_only: bool,
     llm_client: LLMClient | None = None,
 ) -> PipelineState:
@@ -1057,6 +1058,7 @@ def _run_full_pipeline_cli(
         strict=strict,
         fast=fast,
         resume=resume,
+        time_budget_min=time_budget_min,
     )
 
 
@@ -1098,6 +1100,17 @@ def run(
         bool,
         typer.Option("--resume", help="Resume from completed stage checkpoints in --out."),
     ] = False,
+    time_budget_min: Annotated[
+        float | None,
+        typer.Option(
+            "--time-budget-min",
+            min=0.1,
+            help=(
+                "Optional soft time budget in minutes; "
+                "degrades eval/optimizer budgets gracefully."
+            ),
+        ),
+    ] = None,
     bm25_only: Annotated[
         bool,
         typer.Option("--bm25-only", help="Build retrieval index without dense embeddings."),
@@ -1123,8 +1136,12 @@ def run(
             strict=strict,
             fast=fast,
             resume=resume,
+            time_budget_min=time_budget_min,
             bm25_only=bm25_only,
         )
+    except LLMProviderError as exc:
+        console.print(Panel(str(exc), title="LLM Provider Error", border_style="red"))
+        raise typer.Exit(code=1) from exc
     except PipelineExecutionError as exc:
         console.print(f"[red]{exc}[/red]")
         console.print(f"[yellow]Partial report written to {out / 'report.md'}[/yellow]")

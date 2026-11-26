@@ -112,3 +112,16 @@
   - Tests in `tests/test_pipeline_report.py` and `tests/test_smoke.py`
 - **Verification**:
   - `pytest -q`, `ruff check .`, `forge run`, and `forge chat` on generated `definition.yaml` passed cleanly.
+
+### Phase 10 — Hardening, Chaos Tests, Rehearsal & Documentation (`phase-10-hardening`)
+- **Status**: Complete
+- **Deliverables**:
+  - Hardened `forge.ingest.loaders`: large-file byte/char caps with warnings, UTF-16/Latin-1/CP1252 fallback, odd CSV delimiter sniffing (`;`, `\t`, `|`, `,`), empty/scanned PDF/unsupported file warnings
+  - Hardened `forge.llm.providers`: transient timeout/5xx exponential backoff retries and clear actionable `ConnectError` guidance for Ollama
+  - Hardened `forge.evals.generator`: graceful eval quota scaling on very short corpora with `scaled_quotas_note`
+  - Added `--time-budget-min` graceful degradation across `ForgePipeline` + `OptimizerLoop` and recorded degradation notes in `report.md`
+  - Added rehearsal sets under `fixtures/rehearsal/it_helpdesk/` and `fixtures/rehearsal/unsupported_scope/`
+  - Added `tests/test_domain_isolation.py` (static domain-term check over `src/` and `prompts/`) and `tests/test_hardening.py` (chaos, robustness, time budget, rehearsal tests)
+  - Wrote top-level `README.md` with install, model setup, quickstart, architecture, design decisions, and honest limitations
+- **Verification**:
+  - `pytest -q` (88 passed) and `ruff check .` passed cleanly. Note: Phase 9 live-model demo corpora remain on branch `phase-9-demos` pending an active Ollama instance.
