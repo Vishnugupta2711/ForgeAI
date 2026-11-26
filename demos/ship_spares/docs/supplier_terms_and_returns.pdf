@@ -8,8 +8,8 @@ endobj
 2 0 obj
 <<
 /Type /Pages
-/Count 2
-/Kids [ 4 0 R 7 0 R ]
+/Count 3
+/Kids [ 4 0 R 7 0 R 10 0 R ]
 >>
 endobj
 3 0 obj
@@ -40,41 +40,95 @@ endobj
 endobj
 6 0 obj
 <<
-/Length 1029
+/Length 3080
 >>
 stream
 BT
 /F1 11 Tf
 54 740 Td
-(SUPPLIER COMMERCIAL TERMS AND RETURNS POLICY \(DOC SUP-01\)) Tj
+(SUPPLIER COMMERCIAL TERMS AND RETURNS POLICY \(DOC SUP-01, REV 2.0\)) Tj
 0 -15 Td
 () Tj
 0 -15 Td
-(1. Payment Terms and Early Settlement) Tj
+(1. Approved Suppliers and Catalogue Pricing Authority) Tj
 0 -15 Td
-(Standard invoice terms across all four approved suppliers are Net 30 calendar) Tj
+(These commercial terms govern all marine spare-parts purchase orders placed with) Tj
 0 -15 Td
-(days from bill of lading date.) Tj
+(the four approved framework suppliers in spares_catalogue.csv: NordicMarine) Tj
 0 -15 Td
-(Purchase orders totaling USD 5,000 or more qualify for a 2% early-payment) Tj
+(Supply, BalticValve GmbH, PacificPump Co, and AegisElectro Ltd.) Tj
 0 -15 Td
-(discount when settled within 10 calendar days of invoice issue.) Tj
+(Catalogue unit_price_usd, min_order_qty, lead_time_days, stock_location, and) Tj
+0 -15 Td
+(hazmat_flag fields in spares_catalogue.csv represent binding baseline master data) Tj
+0 -15 Td
+(for routine vessel procurement.) Tj
+0 -15 Td
+(Informal quotes from local port agents do not override spares_catalogue.csv) Tj
+0 -15 Td
+(pricing unless backed by a signed Fleet Procurement price addendum valid for at) Tj
+0 -15 Td
+(least 90 calendar days.) Tj
 0 -15 Td
 () Tj
 0 -15 Td
-(2. Line-Item Volume Discounts and Handling Fees) Tj
+(2. Minimum Order Quantities and Multi-Line Consolidation) Tj
 0 -15 Td
-(Orders meeting or exceeding 10 units on a single part line receive a 5% unit) Tj
+(Every purchase order line item must meet or exceed the catalogue min_order_qty) Tj
 0 -15 Td
-(price discount. Orders meeting or exceeding 25 units on a single part line) Tj
+(specified for that part_no in spares_catalogue.csv.) Tj
 0 -15 Td
-(receive a 10% unit price discount \(discounts do not stack\).) Tj
+(Orders requesting fewer units than min_order_qty are auto-rejected unless approved) Tj
 0 -15 Td
-(Any purchase order with total merchandise value below USD 500 incurs a flat) Tj
+(as a critical off-hire breakdown AND unit_price_usd >= USD 200 on a non-hazmat) Tj
 0 -15 Td
-(USD 125 small-order handling fee.) Tj
+(item, incurring a USD 75 broken-pack surcharge.) Tj
 0 -15 Td
-(Every order must meet or exceed the catalogue min_order_qty for each line.) Tj
+(A single purchase order may combine multiple SKUs stocked at different warehouses) Tj
+0 -15 Td
+(or suppliers; however, volume discount tiers evaluate each single SKU line) Tj
+0 -15 Td
+(independently and never sum across different part numbers.) Tj
+0 -15 Td
+() Tj
+0 -15 Td
+(3. Line-Item Volume Discounts) Tj
+0 -15 Td
+(Standard catalogue pricing applies to single-part line quantities from 1 up to 9) Tj
+0 -15 Td
+(units \(0 percent discount, subject to min_order_qty\).) Tj
+0 -15 Td
+(Single-part orders of 10 to 24 units on one part_no receive a 5 percent unit price) Tj
+0 -15 Td
+(discount across all units on that line.) Tj
+0 -15 Td
+(Single-part orders of 25 or more units on one part_no receive a 10 percent unit) Tj
+0 -15 Td
+(price discount across all units on that line.) Tj
+0 -15 Td
+(Volume discounts are strictly non-stacking and cannot be retroactively combined) Tj
+0 -15 Td
+(across separate purchase orders placed in the same calendar week.) Tj
+0 -15 Td
+() Tj
+0 -15 Td
+(4. Small-Order Handling and Dangerous-Goods Fees) Tj
+0 -15 Td
+(Any purchase order whose total discounted merchandise subtotal \(sum of discounted) Tj
+0 -15 Td
+(line totals, before fees or freight\) is strictly below USD 500 incurs a flat USD) Tj
+0 -15 Td
+(125 small-order handling fee.) Tj
+0 -15 Td
+(Purchase orders with a discounted merchandise subtotal of USD 500 or more incur) Tj
+0 -15 Td
+(USD 0 small-order handling fee.) Tj
+0 -15 Td
+(Every purchase order containing one or more items with hazmat_flag=true in) Tj
+0 -15 Td
+(spares_catalogue.csv incurs a mandatory USD 85 dangerous-goods \(DG\) documentation) Tj
+0 -15 Td
+(and IMDG packing fee per purchase order \(flat per PO\).) Tj
 0 -15 Td
 ET
 endstream
@@ -101,47 +155,159 @@ endobj
 endobj
 9 0 obj
 <<
-/Length 580
+/Length 3184
 >>
 stream
 BT
 /F1 11 Tf
 54 740 Td
-(3. Returns, Restocking, and Hazmat Exclusions) Tj
+(Cross-policy reference: split-shipment administrative fees and air-expedite) Tj
 0 -15 Td
-(Unused non-hazmat spares in original sealed packaging may be returned within) Tj
+(surcharges are governed by DOC SUP-02, Sections 4 and 6.) Tj
 0 -15 Td
-(30 calendar days of delivery subject to a 15% restocking fee.) Tj
+() Tj
 0 -15 Td
-(Items flagged hazmat_flag=true in spares_catalogue.csv are strictly) Tj
+(5. Payment Terms, Early Settlement, and Late Interest) Tj
 0 -15 Td
-(non-returnable once dispatched from the supplier warehouse.) Tj
+(Standard invoice payment terms across all four approved suppliers are Net 30) Tj
 0 -15 Td
-(Factory-defective parts \(documented within 14 calendar days\) are replaced at) Tj
+(calendar days from Bill of Lading \(BoL\) or warehouse dispatch receipt date,) Tj
 0 -15 Td
-(zero restocking fee with return freight covered by the supplier.) Tj
+(settled in USD via SWIFT wire.) Tj
+0 -15 Td
+(Purchase orders with a discounted merchandise subtotal of USD 5,000 or more) Tj
+0 -15 Td
+(qualify for a 2 percent early-payment discount when paid in full within 10) Tj
+0 -15 Td
+(calendar days of invoice issue date.) Tj
+0 -15 Td
+(The 2 percent early-payment discount applies solely to the discounted merchandise) Tj
+0 -15 Td
+(subtotal and never discounts small-order, DG, or freight fees.) Tj
+0 -15 Td
+(Invoices overdue > 30 calendar days accrue 1.5 percent interest per 30-day period) Tj
+0 -15 Td
+(and hold open dispatches once an account is > 45 days past due.) Tj
+0 -15 Td
+() Tj
+0 -15 Td
+(6. Order Cancellation and Pre-Dispatch Amendments) Tj
+0 -15 Td
+(Unshipped non-hazmat orders \(hazmat_flag=false\) may be cancelled free of charge at) Tj
+0 -15 Td
+(least 48 hours before scheduled warehouse dispatch \(or before Thursday 16:00 UTC) Tj
+0 -15 Td
+(weekly cutoff per DOC SUP-02, Section 3\).) Tj
+0 -15 Td
+(Non-hazmat cancellations submitted fewer than 48 hours prior to dispatch incur a 5) Tj
+0 -15 Td
+(percent cancellation fee \(minimum USD 50 per cancelled PO\).) Tj
+0 -15 Td
+(For items flagged hazmat_flag=true, once dangerous-goods booking is filed \(> 24) Tj
+0 -15 Td
+(hours after PO confirmation\), cancellation incurs a flat USD 150 DG carrier) Tj
+0 -15 Td
+(cancellation penalty prior to dispatch.) Tj
+0 -15 Td
+() Tj
+0 -15 Td
+(7. Returns Eligibility, Restocking Windows, and Hazmat Ban) Tj
+0 -15 Td
+(Unused spares flagged hazmat_flag=false in spares_catalogue.csv, kept in unopened) Tj
+0 -15 Td
+(OEM sealed packaging, may be returned within 30 calendar days of delivery subject) Tj
+0 -15 Td
+(to a 15 percent restocking fee \(buyer pays return freight\).) Tj
+0 -15 Td
+(Non-hazmat returns between 31 and 60 calendar days require supplier RMA approval) Tj
+0 -15 Td
+(and incur a 25 percent restocking fee. Non-hazmat spares older than 60 calendar) Tj
+0 -15 Td
+(days from delivery are non-returnable.) Tj
+0 -15 Td
+(Strict hazmat exclusion: All items with hazmat_flag=true in spares_catalogue.csv) Tj
+0 -15 Td
+(are strictly non-returnable once dispatched from the supplier warehouse,) Tj
+0 -15 Td
+(regardless of condition or unopened packaging.) Tj
+0 -15 Td
+() Tj
+0 -15 Td
+(8. OEM Warranty, Transit Damage, and Defective Replacements) Tj
+0 -15 Td
+(All four suppliers provide a 12-month OEM workmanship warranty from installation) Tj
+0 -15 Td
+(or 18 months from port delivery, whichever occurs first.) Tj
+0 -15 Td
+(Factory-defective parts, wrong SKUs shipped in error, or transit-damaged spares) Tj
+0 -15 Td
+(documented with photos within 14 calendar days of port gate receipt \(DOC SUP-02,) Tj
+0 -15 Td
+(Section 8\) are replaced or credited at 0 percent restocking fee.) Tj
+0 -15 Td
+ET
+endstream
+endobj
+10 0 obj
+<<
+/Type /Page
+/Resources <<
+/Font <<
+/F1 11 0 R
+>>
+>>
+/MediaBox [ 0.0 0.0 612 792 ]
+/Parent 2 0 R
+/Contents [ 12 0 R ]
+>>
+endobj
+11 0 obj
+<<
+/Type /Font
+/Subtype /Type1
+/BaseFont /Helvetica
+>>
+endobj
+12 0 obj
+<<
+/Length 309
+>>
+stream
+BT
+/F1 11 Tf
+54 740 Td
+(On verified defective or wrong-shipment claims, return freight is paid 100 percent) Tj
+0 -15 Td
+(by the supplier; defective hazmat_flag=true stock is collected via supplier-) Tj
+0 -15 Td
+(arranged licensed IMDG DG return pickup at zero cost to the buyer.) Tj
+0 -15 Td
+() Tj
 0 -15 Td
 ET
 endstream
 endobj
 xref
-0 10
+0 13
 0000000000 65535 f 
 0000000015 00000 n 
 0000000054 00000 n 
-0000000119 00000 n 
-0000000168 00000 n 
-0000000304 00000 n 
-0000000374 00000 n 
-0000001455 00000 n 
-0000001591 00000 n 
-0000001661 00000 n 
+0000000126 00000 n 
+0000000175 00000 n 
+0000000311 00000 n 
+0000000381 00000 n 
+0000003513 00000 n 
+0000003649 00000 n 
+0000003719 00000 n 
+0000006955 00000 n 
+0000007094 00000 n 
+0000007165 00000 n 
 trailer
 <<
-/Size 10
+/Size 13
 /Root 3 0 R
 /Info 1 0 R
 >>
 startxref
-2292
+7526
 %%EOF

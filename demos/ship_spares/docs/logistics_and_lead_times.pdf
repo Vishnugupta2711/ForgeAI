@@ -40,31 +40,95 @@ endobj
 endobj
 6 0 obj
 <<
-/Length 695
+/Length 3205
 >>
 stream
 BT
 /F1 11 Tf
 54 740 Td
-(MARINE SPARES LOGISTICS AND LEAD-TIME RULES \(DOC SUP-02\)) Tj
+(MARINE SPARES LOGISTICS AND LEAD-TIME RULES \(DOC SUP-02, REV 2.0\)) Tj
 0 -15 Td
 () Tj
 0 -15 Td
-(1. Effective Lead-Time Calculation) Tj
+(1. Regional Warehouse Network and Base Lead Times) Tj
 0 -15 Td
-(Base lead_time_days in spares_catalogue.csv measures warehouse dispatch to port) Tj
+(Approved spares in spares_catalogue.csv ship from four regional bonded warehouses:) Tj
 0 -15 Td
-(gate under normal non-hazmat conditions.) Tj
+(Rotterdam-WH1, Singapore-WH2, Hamburg-WH3, and Busan-WH4.) Tj
 0 -15 Td
-(Add +4 calendar days for dangerous-goods documentation and customs clearance) Tj
+(The catalogue column lead_time_days measures baseline calendar days from PO) Tj
 0 -15 Td
-(whenever hazmat_flag is true.) Tj
+(confirmation to port gate release under standard non-hazmat conditions when the) Tj
 0 -15 Td
-(Add +3 calendar days for inter-port consolidation when stock_location differs) Tj
+(vessel's receiving hub matches stock_location.) Tj
 0 -15 Td
-(from the vessel's designated receiving hub.) Tj
+(Orders placed after 14:00 local warehouse time count the following business day as) Tj
 0 -15 Td
-(Formula: effective_lead_days = lead_time_days + \(4 if hazmat\) + \(3 if transfer\).) Tj
+(Day 0 for lead-time tracking.) Tj
+0 -15 Td
+() Tj
+0 -15 Td
+(2. Standard Effective Lead-Time Formula) Tj
+0 -15 Td
+(To compute standard sea/land effective delivery lead time to a vessel's receiving) Tj
+0 -15 Td
+(hub, apply: effective_lead_days = lead_time_days + hazmat_days + transfer_days.) Tj
+0 -15 Td
+(Add +4 calendar days \(hazmat_days = 4\) whenever hazmat_flag is true in) Tj
+0 -15 Td
+(spares_catalogue.csv for IMDG dangerous-goods clearance and documentation.) Tj
+0 -15 Td
+(Add +3 calendar days \(transfer_days = 3\) whenever catalogue stock_location differs) Tj
+0 -15 Td
+(from the vessel's designated receiving hub \(inter-port feeder\).) Tj
+0 -15 Td
+(Example logic: a part with lead_time_days=10, hazmat_flag=true, and stock_location) Tj
+0 -15 Td
+(!= receiving hub yields 10 + 4 + 3 = 17 effective days.) Tj
+0 -15 Td
+() Tj
+0 -15 Td
+(3. Weekly Consolidation Cutoffs and Port Exceptions) Tj
+0 -15 Td
+(Inter-port sea consolidation shuttles close every Thursday at 16:00 UTC across all) Tj
+0 -15 Td
+(hubs. Transfer orders confirmed after Thursday 16:00 UTC wait for the next weekly) Tj
+0 -15 Td
+(Thursday cycle \(+1 to +7 calendar days cutoff wait\).) Tj
+0 -15 Td
+(Local same-port collections \(stock_location == receiving hub\) dispatch daily and) Tj
+0 -15 Td
+(do NOT wait for the Thursday 16:00 UTC consolidation cutoff.) Tj
+0 -15 Td
+(European hub exception: Road shuttle transfers exclusively between Rotterdam-WH1) Tj
+0 -15 Td
+(and Hamburg-WH3 for non-hazmat orders under 50 kg reduce transfer_days from +3) Tj
+0 -15 Td
+(days down to +1 calendar day.) Tj
+0 -15 Td
+(Seasonal congestion buffer: During peak dry-docking windows \(March 1 to April 30) Tj
+0 -15 Td
+(and September 1 to October 31\), standard sea dispatches out of Singapore-WH2 and) Tj
+0 -15 Td
+(Busan-WH4 add +2 calendar days to effective_lead_days.) Tj
+0 -15 Td
+() Tj
+0 -15 Td
+(4. Expedited Air Freight Eligibility, Math, and Surcharges) Tj
+0 -15 Td
+(Non-hazmat spares \(hazmat_flag=false\) with total shipment weight under 150 kg) Tj
+0 -15 Td
+(qualify for expedited air freight upon buyer instruction.) Tj
+0 -15 Td
+(Expedited air freight cuts base lead_time_days by 50 percent, rounded UP to the) Tj
+0 -15 Td
+(nearest whole calendar day \(ceil\(lead_time_days / 2\)\). For example, a 7-day base) Tj
+0 -15 Td
+(lead time becomes 4 days.) Tj
+0 -15 Td
+(If expedited air freight must transfer between different ports \(stock_location !=) Tj
+0 -15 Td
+(receiving_hub\), add +2 calendar days air-hub transit instead of the +3 sea-) Tj
 0 -15 Td
 ET
 endstream
@@ -91,23 +155,95 @@ endobj
 endobj
 9 0 obj
 <<
-/Length 499
+/Length 3124
 >>
 stream
 BT
 /F1 11 Tf
 54 740 Td
-(2. Expedited Air Freight and Port Cutoffs) Tj
+(consolidation transfer.) Tj
 0 -15 Td
-(Non-hazmat spares may use expedited air freight, cutting base lead_time_days) Tj
+(Air expedite incurs a flat USD 450 surcharge per PO up to 30 kg gross weight, plus) Tj
 0 -15 Td
-(by 50% \(rounded up to the nearest whole day\) for a flat USD 450 surcharge.) Tj
+(USD 6.50 per kilogram for shipments between 31 kg and 149 kg.) Tj
 0 -15 Td
-(Items with hazmat_flag=true are prohibited from standard air-freight expedite) Tj
+() Tj
 0 -15 Td
-(and must move via sea/dangerous-goods charter.) Tj
+(5. Hazardous Materials \(IMDG\) Prohibitions) Tj
 0 -15 Td
-(Weekly port consolidation cutoffs close every Thursday at 16:00 UTC.) Tj
+(Parts flagged hazmat_flag=true in spares_catalogue.csv \(Marine Lithium Battery) Tj
+0 -15 Td
+(Modules, Refrigerant R404A Service Cylinders, and Synthetic Gear Oil 20L Drums\)) Tj
+0 -15 Td
+(are strictly prohibited from expedited air freight \(Sec 4\).) Tj
+0 -15 Td
+(All hazmat_flag=true spares must travel via IMDG-certified sea freight or coastal) Tj
+0 -15 Td
+(DG charter and always incur both the +4 day DG customs window and the USD 85 DG) Tj
+0 -15 Td
+(documentation fee \(DOC SUP-01, Section 4\).) Tj
+0 -15 Td
+(Cross-policy return ban: once dispatched, hazmat_flag=true spares cannot be) Tj
+0 -15 Td
+(returned unless factory-defective \(DOC SUP-01, Sections 7 and 8\).) Tj
+0 -15 Td
+() Tj
+0 -15 Td
+(6. Mixed-PO Split Shipments and Late-Delivery Cancellation) Tj
+0 -15 Td
+(When a multi-line PO contains both hazmat_flag=false and hazmat_flag=true parts,) Tj
+0 -15 Td
+(buyers may split dispatch so non-hazmat lines ship by standard or air freight) Tj
+0 -15 Td
+(while hazmat lines follow DG sea schedules.) Tj
+0 -15 Td
+(Split dispatch incurs a USD 65 split-AWB administration fee when total PO) Tj
+0 -15 Td
+(merchandise value is below USD 2,500; waived on POs of USD 2,500 or more.) Tj
+0 -15 Td
+(Suppliers must flag backorders within 1 working day. If dispatch slips > 5) Tj
+0 -15 Td
+(calendar days past quoted effective_lead_days, the buyer may cancel delayed lines) Tj
+0 -15 Td
+(penalty-free regardless of DOC SUP-01 Section 6.) Tj
+0 -15 Td
+() Tj
+0 -15 Td
+(7. Incoterms, Outer-Anchorage Launches, and Customs Paperwork) Tj
+0 -15 Td
+(Standard catalogue prices assume DAP \(Delivered at Place\) delivery to the bonded) Tj
+0 -15 Td
+(receiving port warehouse gate.) Tj
+0 -15 Td
+(Direct vessel delivery at outer anchorage requires a port supply launch, incurring) Tj
+0 -15 Td
+(a flat USD 190 barge fee unless bundled >= USD 3,000.) Tj
+0 -15 Td
+(Missing HS tariff codes delay customs release by 2 to 4 calendar days.) Tj
+0 -15 Td
+(NordicMarine Supply and BalticValve GmbH automatically pre-file EUR.1 origin) Tj
+0 -15 Td
+(certificates for Rotterdam-WH1 and Hamburg-WH3 arrivals.) Tj
+0 -15 Td
+() Tj
+0 -15 Td
+(8. Storage, Shelf-Life, and 14-Day Receiving Inspection) Tj
+0 -15 Td
+(Marine Lithium Battery Modules \(hazmat_flag=true\) must ship at 30 to 40 percent) Tj
+0 -15 Td
+(state-of-charge in UN crates and require climate-controlled storage between 10 and) Tj
+0 -15 Td
+(25 degrees Celsius at the receiving hub.) Tj
+0 -15 Td
+(Synthetic Gear Oil 20L Drums and Refrigerant R404A Cylinders must arrive with at) Tj
+0 -15 Td
+(least 18 months remaining shelf life at dispatch.) Tj
+0 -15 Td
+(Receiving engineers have 14 calendar days from port gate receipt to log packaging) Tj
+0 -15 Td
+(damage, shortages, or defects; timely documentation triggers zero-fee replacement) Tj
+0 -15 Td
+(under DOC SUP-01 Section 8.) Tj
 0 -15 Td
 ET
 endstream
@@ -121,9 +257,9 @@ xref
 0000000168 00000 n 
 0000000304 00000 n 
 0000000374 00000 n 
-0000001120 00000 n 
-0000001256 00000 n 
-0000001326 00000 n 
+0000003631 00000 n 
+0000003767 00000 n 
+0000003837 00000 n 
 trailer
 <<
 /Size 10
@@ -131,5 +267,5 @@ trailer
 /Info 1 0 R
 >>
 startxref
-1876
+7013
 %%EOF
