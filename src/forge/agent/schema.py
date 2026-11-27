@@ -233,3 +233,5 @@ class AnswerRecord(BaseModel):
     effective_query: str = ""
     latency_ms: float = 0.0
     model: str = ""
+    contract_repairs: int = 0
+    contract_failed: bool = False

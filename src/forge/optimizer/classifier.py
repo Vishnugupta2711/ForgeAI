@@ -73,6 +73,25 @@ def classify_failure(
     v = result.verdict
     out = result.answer_record.output
 
+    # 0. Output contract schema failure (must NOT be misclassified as wrong_refusal)
+    contract_failed = result.answer_record.contract_failed or (
+        out.refusal_reason == "Model output failed output contract validation."
+    )
+    if contract_failed:
+        return ClassifiedFailure(
+            case_id=case.id,
+            eval_category=case.category,
+            failure_category="prompt_defect",
+            subtype="contract_failure",
+            evidence=(
+                "Agent response failed output contract JSON schema validation after "
+                f"{result.answer_record.contract_repairs} repair attempt(s) "
+                "(not a policy refusal)."
+            ),
+            question_preview=case.question[:100],
+            reasons=v.reasons,
+        )
+
     # 1. Wrong refusal / missed refusal (authoritative deterministic check)
     if not v.refusal_ok:
         if case.expected_behavior == "refuse" and not out.refused:

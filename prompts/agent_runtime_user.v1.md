@@ -7,4 +7,6 @@ Retrieved context:
 User question:
 {question}
 
-Respond with a single JSON object (either a tool_call from the allowed tools or the final answer JSON).
+{contract_schema_block}
+
+Respond with a single JSON object (either a tool_call from the allowed tools or a final answer strictly matching the Authoritative Output Contract Schema above).

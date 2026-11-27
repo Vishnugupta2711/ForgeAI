@@ -198,6 +198,9 @@ def test_runtime_contract_violation_repair_and_fallback() -> None:
     fallback_record = bad_runtime.answer("Any question")
     assert fallback_record.output.refused is True
     assert fallback_record.output.confidence == 0.0
+    assert fallback_record.contract_repairs == 2
+    assert fallback_record.contract_failed is True
+    assert len(bad_llm.fake_provider.chat_calls) == 3
     assert "failed output contract validation" in (fallback_record.output.refusal_reason or "")
 
 
@@ -229,3 +232,63 @@ def test_runtime_min_score_gate_and_query_rewrite() -> None:
     assert record.retrieved_chunks == []
     assert record.output.refused is True
     assert any("min_score gate" in t for t in record.trace)
+
+
+def test_runtime_appends_authoritative_schema_despite_wrong_format_rules() -> None:
+    defn = AgentDefinition.load_yaml(HAND_AGENT_PATH)
+    defn.retrieval.query_rewrite = False
+    defn.system_prompt.format_rules = (
+        "Each citation object MUST have ONLY keys 'doc_id' and 'chunk_id'. Omit 'quote'."
+    )
+
+    llm = FakeLLM(
+        responses=[
+            # First answer follows drifted format_rules (missing quote) -> repair retry 1 fixes it
+            json.dumps(
+                {
+                    "answer": "Deploy hydrophone pods at 45 meters.",
+                    "citations": [
+                        {"doc_id": "acoustic_guide.md", "chunk_id": "acoustic_guide.md::c1"}
+                    ],
+                    "refused": False,
+                    "confidence": 0.85,
+                }
+            ),
+            json.dumps(
+                {
+                    "answer": "Deploy hydrophone pods at 45 meters below mean sea level.",
+                    "citations": [
+                        {
+                            "doc_id": "acoustic_guide.md",
+                            "chunk_id": "acoustic_guide.md::c1",
+                            "quote": "Deploy hydrophone pods at 45 meters below mean sea level",
+                        }
+                    ],
+                    "refused": False,
+                    "refusal_reason": None,
+                    "confidence": 0.91,
+                }
+            ),
+        ]
+    )
+    index, tool_ctx = _build_fixture_index(llm)
+    runtime = AgentRuntime(defn, index, llm_client=llm, tool_context=tool_ctx)
+    record = runtime.answer("Where should hydrophone pods be deployed?")
+
+    assert record.output.refused is False
+    assert record.contract_failed is False
+    assert record.contract_repairs == 1
+    assert len(record.output.citations) == 1
+    assert record.output.citations[0].quote
+
+    # Initial user prompt MUST include machine-generated contract schema + quote key
+    first_user_msg = llm.fake_provider.chat_calls[0]["messages"][-1]["content"]
+    assert "Authoritative Output Contract Schema" in first_user_msg
+    assert "chunk_id, doc_id, quote" in first_user_msg
+    assert json.dumps(defn.output_contract.json_schema, indent=2) in first_user_msg
+
+    # Repair prompt MUST include exact Pydantic validation error + JSON schema
+    repair_user_msg = llm.fake_provider.chat_calls[1]["messages"][-1]["content"]
+    assert "quote" in repair_user_msg
+    assert "Field required" in repair_user_msg
+    assert json.dumps(defn.output_contract.json_schema, indent=2) in repair_user_msg

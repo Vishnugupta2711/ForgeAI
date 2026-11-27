@@ -179,6 +179,47 @@ def test_classifier_all_four_categories_and_tiebreaker() -> None:
     f4 = classify_failure(ans_case, pd_res)
     assert f4.failure_category == "prompt_defect"
 
+    # 5. Contract schema failure (fallback sets refused=True -> refusal_ok=False, yet must NOT
+    # be misclassified as wrong_refusal!)
+    contract_fail_res = EvalCaseResult(
+        case_id="DEV-002",
+        category="single_doc",
+        split="dev",
+        question=ans_case.question,
+        expected_behavior="answer",
+        answer_record=AnswerRecord(
+            question=ans_case.question,
+            output=AgentOutput(
+                answer="Unable to produce a schema-compliant grounded response.",
+                refused=True,
+                refusal_reason="Model output failed output contract validation.",
+                confidence=0.0,
+            ),
+            retrieved_chunks=[
+                RetrievedChunkRecord(
+                    chunk_id="acoustic_guide.md::c2", doc_id="acoustic_guide.md", score=0.016
+                )
+            ],
+            contract_repairs=2,
+            contract_failed=True,
+        ),
+        verdict=CaseVerdict(
+            case_id="DEV-002",
+            category="single_doc",
+            expected_behavior="answer",
+            grounded=True,
+            correct=False,
+            refusal_ok=False,
+            passed=False,
+            reasons=["Wrongful refusal: expected 'answer'."],
+        ),
+    )
+    f5 = classify_failure(ans_case, contract_fail_res)
+    assert f5.failure_category == "prompt_defect"
+    assert f5.subtype == "contract_failure"
+    assert f5.failure_category != "wrong_refusal"
+    assert "2 repair attempt" in f5.evidence
+
 
 def test_diff_guard_enforces_byte_identical_non_targets() -> None:
     defn = AgentDefinition.load_yaml(HAND_AGENT_PATH)
