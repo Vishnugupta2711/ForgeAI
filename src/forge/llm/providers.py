@@ -4,13 +4,58 @@ from __future__ import annotations
 
 import hashlib
 import math
+import random
+import threading
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import contextmanager
 from typing import Any, Protocol
 
 import httpx
 
 from forge.llm.models import EmbedResult, LLMMessage, LLMProviderError, LLMResponse
+
+
+def _redact_secrets(text: str, secrets: list[str]) -> str:
+    redacted = text
+    for secret in secrets:
+        if secret and len(secret) >= 4:
+            redacted = redacted.replace(secret, "[REDACTED]")
+    return redacted
+
+
+class _RateLimiter:
+    """Thread-safe requests-per-minute pacer and max-concurrency gate."""
+
+    def __init__(
+        self,
+        requests_per_minute: float | None = None,
+        max_concurrency: int = 2,
+    ) -> None:
+        self.min_interval = (
+            60.0 / requests_per_minute
+            if requests_per_minute is not None and requests_per_minute > 0
+            else 0.0
+        )
+        self._semaphore = threading.Semaphore(max(1, max_concurrency))
+        self._lock = threading.Lock()
+        self._next_allowed = 0.0
+
+    @contextmanager
+    def acquire(self) -> Iterator[None]:
+        self._semaphore.acquire()
+        try:
+            if self.min_interval > 0.0:
+                with self._lock:
+                    now = time.monotonic()
+                    wait = self._next_allowed - now
+                    if wait > 0:
+                        time.sleep(wait)
+                        now = time.monotonic()
+                    self._next_allowed = now + self.min_interval
+            yield
+        finally:
+            self._semaphore.release()
 
 
 class LLMProvider(Protocol):
@@ -195,15 +240,41 @@ class OpenAICompatProvider:
         base_url: str,
         api_key: str = "",
         timeout_seconds: float = 120.0,
+        *,
+        append_v1: bool = True,
+        require_api_key: bool = False,
+        api_key_env: str = "FORGE_OPENAI_API_KEY",
+        requests_per_minute: float | None = None,
+        max_concurrency: int = 2,
+        max_http_retries: int = 3,
+        backoff_seconds: float = 0.5,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         if not base_url:
             raise LLMProviderError("openai_compat_base_url must be configured for openai_compat")
         cleaned = base_url.rstrip("/")
-        self.base_url = cleaned if cleaned.endswith("/v1") else f"{cleaned}/v1"
+        if append_v1 and not cleaned.endswith("/v1"):
+            self.base_url = f"{cleaned}/v1"
+        else:
+            self.base_url = cleaned
         self.api_key = api_key
+        self.require_api_key = require_api_key
+        self.api_key_env = api_key_env
         self.timeout_seconds = timeout_seconds
+        self.max_http_retries = max_http_retries
+        self.backoff_seconds = backoff_seconds
+        self._limiter = _RateLimiter(
+            requests_per_minute=requests_per_minute,
+            max_concurrency=max_concurrency,
+        )
         self._transport = transport
+
+    def _ensure_api_key(self) -> None:
+        if self.require_api_key and not self.api_key:
+            raise LLMProviderError(
+                f"Missing API key for provider '{self.name}': set {self.api_key_env} in "
+                "your environment or gitignored .env file."
+            )
 
     def _client(self) -> httpx.Client:
         headers: dict[str, str] = {}
@@ -216,6 +287,79 @@ class OpenAICompatProvider:
             transport=self._transport,
         )
 
+    def _retry_delay(self, attempt: int, resp: httpx.Response | None = None) -> float:
+        if resp is not None:
+            retry_after = resp.headers.get("retry-after")
+            if retry_after:
+                try:
+                    return min(30.0, max(0.05, float(retry_after)))
+                except ValueError:
+                    pass
+        base = max(0.01, self.backoff_seconds) * (2**attempt)
+        jitter = random.uniform(0.8, 1.2)
+        return min(30.0, base * jitter)
+
+    def _post_with_backoff(
+        self, client: httpx.Client, path: str, payload: dict[str, Any]
+    ) -> httpx.Response:
+        last_exc: Exception | None = None
+        last_resp: httpx.Response | None = None
+
+        for attempt in range(self.max_http_retries + 1):
+            try:
+                with self._limiter.acquire():
+                    resp = client.post(path, json=payload)
+            except httpx.TimeoutException as exc:
+                last_exc = exc
+                if attempt < self.max_http_retries:
+                    time.sleep(self._retry_delay(attempt))
+                    continue
+                raise LLMProviderError(
+                    f"{self.name} request to {path} timed out after {self.timeout_seconds}s: "
+                    f"{_redact_secrets(str(exc), [self.api_key])}"
+                ) from exc
+            except httpx.HTTPError as exc:
+                raise LLMProviderError(
+                    f"{self.name} HTTP error: {_redact_secrets(str(exc), [self.api_key])}"
+                ) from exc
+
+            if resp.status_code in (401, 403):
+                raise LLMProviderError(
+                    f"Authentication failed for provider '{self.name}' (HTTP {resp.status_code}). "
+                    f"Verify {self.api_key_env} in your environment or .env."
+                )
+
+            if resp.status_code in {429, 500, 502, 503, 504}:
+                last_resp = resp
+                if attempt < self.max_http_retries:
+                    time.sleep(self._retry_delay(attempt, resp))
+                    continue
+                if resp.status_code == 429:
+                    raise LLMProviderError(
+                        f"Rate limit / quota exhausted for provider '{self.name}' (HTTP 429) "
+                        "after retries. Lower requests_per_minute in config, reduce eval size "
+                        "with --fast, or wait for project quota reset."
+                    )
+                raise LLMProviderError(
+                    f"Provider '{self.name}' failed with HTTP {resp.status_code} after retries."
+                )
+
+            if resp.status_code >= 400:
+                detail = _redact_secrets(resp.text[:300], [self.api_key])
+                raise LLMProviderError(
+                    f"Provider '{self.name}' rejected request (HTTP {resp.status_code}): {detail}"
+                )
+            return resp
+
+        if last_resp is not None and last_resp.status_code == 429:
+            raise LLMProviderError(
+                f"Rate limit / quota exhausted for provider '{self.name}' (HTTP 429)."
+            )
+        raise LLMProviderError(
+            f"Provider '{self.name}' failed after retries: "
+            f"{_redact_secrets(str(last_exc), [self.api_key])}"
+        )
+
     def chat(
         self,
         messages: list[LLMMessage],
@@ -225,6 +369,7 @@ class OpenAICompatProvider:
         seed: int | None,
         json_mode: bool,
     ) -> LLMResponse:
+        self._ensure_api_key()
         payload: dict[str, Any] = {
             "model": model,
             "messages": [m.model_dump() for m in messages],
@@ -238,11 +383,15 @@ class OpenAICompatProvider:
         start = time.perf_counter()
         try:
             with self._client() as client:
-                resp = client.post("/chat/completions", json=payload)
-                resp.raise_for_status()
+                resp = self._post_with_backoff(client, "/chat/completions", payload)
                 data = resp.json()
+        except LLMProviderError:
+            raise
         except httpx.HTTPError as exc:
-            raise LLMProviderError(f"OpenAI-compatible chat request failed: {exc}") from exc
+            raise LLMProviderError(
+                f"{self.name} chat request failed: "
+                f"{_redact_secrets(str(exc), [self.api_key])}"
+            ) from exc
 
         latency_ms = (time.perf_counter() - start) * 1000.0
         choices = data.get("choices") or []
@@ -266,15 +415,22 @@ class OpenAICompatProvider:
     def embed(self, texts: list[str], *, model: str) -> EmbedResult:
         if not texts:
             return EmbedResult(embeddings=[], model=model, provider=self.name)
+        self._ensure_api_key()
 
         start = time.perf_counter()
         try:
             with self._client() as client:
-                resp = client.post("/embeddings", json={"model": model, "input": texts})
-                resp.raise_for_status()
+                resp = self._post_with_backoff(
+                    client, "/embeddings", {"model": model, "input": texts}
+                )
                 data = resp.json()
+        except LLMProviderError:
+            raise
         except httpx.HTTPError as exc:
-            raise LLMProviderError(f"OpenAI-compatible embed request failed: {exc}") from exc
+            raise LLMProviderError(
+                f"{self.name} embed request failed: "
+                f"{_redact_secrets(str(exc), [self.api_key])}"
+            ) from exc
 
         latency_ms = (time.perf_counter() - start) * 1000.0
         items = sorted(data.get("data", []), key=lambda item: int(item.get("index", 0)))
@@ -287,6 +443,38 @@ class OpenAICompatProvider:
             provider=self.name,
             prompt_tokens=prompt_tokens,
             latency_ms=round(latency_ms, 2),
+        )
+
+
+class GeminiProvider(OpenAICompatProvider):
+    """Gemini API provider using Google's OpenAI-compatible v1beta/openai endpoint."""
+
+    name = "gemini"
+
+    def __init__(
+        self,
+        api_key: str = "",
+        base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai/",
+        timeout_seconds: float = 120.0,
+        *,
+        requests_per_minute: float | None = 10.0,
+        max_concurrency: int = 1,
+        max_http_retries: int = 4,
+        backoff_seconds: float = 1.0,
+        transport: httpx.BaseTransport | None = None,
+    ) -> None:
+        super().__init__(
+            base_url=base_url,
+            api_key=api_key,
+            timeout_seconds=timeout_seconds,
+            append_v1=False,
+            require_api_key=True,
+            api_key_env="FORGE_GEMINI_API_KEY",
+            requests_per_minute=requests_per_minute,
+            max_concurrency=max_concurrency,
+            max_http_retries=max_http_retries,
+            backoff_seconds=backoff_seconds,
+            transport=transport,
         )
 
 

@@ -1,0 +1,36 @@
+# ForgeAI Gemini provider profile (select via `--profile gemini` or `FORGE_PROFILE=gemini`).
+# API key is NEVER stored here — set FORGE_GEMINI_API_KEY in your environment or gitignored .env.
+
+[models]
+agent = "gemini-3.5-flash-lite"
+judge = "gemini-4-hydrogen"
+eval_writer = "gemini-4-hydrogen"
+embed = "gemini-embedding-001"
+
+[endpoints]
+provider = "gemini"
+gemini_base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
+timeout_seconds = 120.0
+
+[generation]
+temperature = 0.0
+seed = 42
+max_retries = 2
+
+[rate_limits]
+requests_per_minute = 10.0
+max_concurrency = 1
+max_http_retries = 4
+backoff_seconds = 1.0
+
+[budgets]
+max_iterations = 3
+max_intake_questions = 5
+max_tokens_per_run = 500000
+max_calls_per_run = 300
+max_latency_seconds_per_run = 900.0
+min_improvement_delta = 0.02
+
+[cache]
+enabled = true
+dir = ".cache/llm"

@@ -104,6 +104,9 @@ class AgentRuntime:
         else:
             cfg = (config or load_config()).model_copy(deep=True)
             cfg.endpoints.provider = definition.model.provider
+            cfg.endpoints.role_providers["agent"] = definition.model.provider
+            if definition.model.embed_provider is not None:
+                cfg.endpoints.role_providers["embed"] = definition.model.embed_provider
             cfg.models.agent = definition.model.name
             cfg.models.embed = definition.model.embed_model
             cfg.generation.temperature = definition.model.temperature

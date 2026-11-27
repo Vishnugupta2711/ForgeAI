@@ -11,6 +11,7 @@ from forge.llm.models import (
 )
 from forge.llm.providers import (
     FakeProvider,
+    GeminiProvider,
     LLMProvider,
     OllamaProvider,
     OpenAICompatProvider,
@@ -21,6 +22,7 @@ __all__ = [
     "EmbedResult",
     "FakeLLM",
     "FakeProvider",
+    "GeminiProvider",
     "LLMClient",
     "LLMMessage",
     "LLMProvider",

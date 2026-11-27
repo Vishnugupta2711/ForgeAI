@@ -467,6 +467,8 @@ class AgentGenerator:
                 brief=requirements.brief,
                 version="1.0.0",
                 provenance=AgentProvenance(
+                    profile=self.config.profile,
+                    providers=self.config.providers_by_role(),
                     model_names={
                         "agent": self.config.models.agent,
                         "judge": self.config.models.judge,
@@ -482,9 +484,10 @@ class AgentGenerator:
             tools=attached_tools,
             output_contract=output_contract,
             model=AgentModelSettings(
-                provider=self.config.endpoints.provider,
+                provider=self.config.provider_for_role("agent"),
                 name=self.config.models.agent,
                 embed_model=self.config.models.embed,
+                embed_provider=self.config.provider_for_role("embed"),
                 temperature=self.config.generation.temperature,
                 seed=self.config.generation.seed,
                 max_tool_calls=3,
