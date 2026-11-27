@@ -562,3 +562,53 @@ def test_pdf_hyphen_unwrap_and_provider_error_fails_cleanly(tmp_path: Path) -> N
     assert "Partial Run Warning" in partial_report
     assert "ollama serve" in partial_report.lower()
 
+
+def test_groundability_timeout_fails_cleanly_and_default_timeout(tmp_path: Path) -> None:
+    """Reproduce ReadTimeout during groundability and verify default config timeout >= 300s."""
+    from forge.config import load_config
+    from forge.groundability import GroundabilityGuard
+    from forge.intake.models import RequirementTopic
+
+    assert load_config().endpoints.timeout_seconds >= 300.0
+
+    _, chunks, profile = ingest_folder(REHEARSAL_UNSUPPORTED / "docs", chunk_size=300, overlap=20)
+    index = HybridIndex.build(chunks, llm_client=None)
+    req = IntakeInterviewer(
+        FakeLLM(
+            responses=[
+                json.dumps({"questions": []}),
+                json.dumps(
+                    {
+                        "scope": "Printer setup.",
+                        "audience": "Staff",
+                        "tone": "Direct",
+                        "must_answer_topics": [
+                            RequirementTopic(
+                                id="REQ-001",
+                                title="Printer Setup",
+                                description="Wireless network",
+                            ).model_dump()
+                        ],
+                    }
+                ),
+            ]
+        )
+    ).run("Help with printer setup.", profile, mode="auto")
+
+    def always_timeout(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("timed out", request=request)
+
+    timeout_client = LLMClient(
+        provider=OllamaProvider(
+            max_http_retries=0,
+            backoff_seconds=0.01,
+            transport=httpx.MockTransport(always_timeout),
+        ),
+        cache_enabled=False,
+    )
+    with pytest.raises(LLMProviderError) as exc_info:
+        GroundabilityGuard(index, timeout_client, top_k=3, alpha=0.0).evaluate(req)
+    assert "timed out" in str(exc_info.value).lower()
+    _ = tmp_path
+
+

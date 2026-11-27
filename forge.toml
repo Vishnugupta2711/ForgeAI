@@ -10,7 +10,7 @@ embed = "nomic-embed-text"
 provider = "ollama"
 ollama_base_url = "http://localhost:11434"
 openai_compat_base_url = ""
-timeout_seconds = 120.0
+timeout_seconds = 300.0
 
 [generation]
 temperature = 0.0
