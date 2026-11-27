@@ -1,0 +1,1 @@
+Build a ship-spares procurement assistant for vessel maintenance buyers. It must look up parts in the spares catalogue CSV (by part number, supplier, stock location, or hazmat flag), calculate order totals, volume discounts, handling fees, and effective delivery lead times using supplier terms and logistics rules.

@@ -1,5 +1,5 @@
-Decompose the brief, requirements, and clarifying Q&A into atomic testable topics and implicit capability needs.
-Include every explicit must-answer topic AND any implicit expectations (such as calculations, tabular filtering, live external lookups, or unsupported requests mentioned in the brief).
+Decompose the brief, requirements, and clarifying Q&A into at most 8-10 concise atomic testable topics and implicit capability needs.
+Include every explicit must-answer topic AND any distinct implicit or unsupported request mentioned in the brief (such as calculations, tabular filtering, or external lookups), keeping each description to one concise sentence instead of splitting every minor sub-clause into separate topics.
 
 Brief:
 {brief}

@@ -132,6 +132,15 @@ forge optimize --run runs/tmp
 - **Synthetic Evals**: Auto-generated evaluation questions may differ from natural end-user phrasing.
 - **Live Demo Runs Pending Local Ollama**: Unit, chaos, rehearsal, and CLI verification suites run deterministically via `FakeLLM`; real-model demo executions on `qwen2.5:3b-instruct` / `llama3.1:8b` / `nomic-embed-text` require a running Ollama daemon with those models pulled.
 
+## Demo Results
+
+See [demos/README.md](demos/README.md) for full run breakdowns, groundability flags, remaining failures, and chat transcripts.
+
+| Demo | Dev Baseline -> Final | Held-Out Baseline -> Final (95% CI) | Tools Attached | Runtime | Report |
+| --- | --- | --- | --- | --- | --- |
+| `hr_policy` | TBD | TBD | TBD | TBD | `runs/hr_policy/report.md` |
+| `ship_spares` | TBD | TBD | TBD | TBD | `runs/ship_spares/report.md` |
+
 ## Reproduction & Testing
 
 ```bash

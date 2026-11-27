@@ -76,9 +76,13 @@ def _canon_dates(text: str) -> str:
     return text
 
 
+def _unwrap_pdf_hyphens(text: str) -> str:
+    return re.sub(r"([A-Za-z0-9])-\s*\n\s*([A-Za-z0-9])", r"\1-\2", text)
+
+
 def canonicalize_text(text: str) -> str:
     """Canonicalize numbers, currency, units, dates, and whitespace for matching."""
-    out = _canon_dates(text)
+    out = _canon_dates(_unwrap_pdf_hyphens(text))
     out = _CURRENCY_PREFIX_RE.sub(
         lambda m: f"{_CURRENCY_MAP.get(m.group(1), m.group(1))} {_canon_number(m.group(2))}",
         out,
@@ -109,14 +113,15 @@ def verify_quote_in_evidence(
     min_chars: int = 4,
 ) -> bool:
     """Verify quote is a real exact or whitespace-normalized substring of evidence."""
-    cleaned = quote.strip()
+    cleaned = _unwrap_pdf_hyphens(quote).strip()
     if len(cleaned) < min_chars:
         return False
     norm_quote = _WHITESPACE_RE.sub(" ", cleaned).lower()
     for text in evidence_texts:
-        if cleaned in text:
+        if cleaned in text or quote.strip() in text:
             return True
-        if norm_quote in _WHITESPACE_RE.sub(" ", text).lower():
+        norm_ev = _WHITESPACE_RE.sub(" ", _unwrap_pdf_hyphens(text)).lower()
+        if norm_quote in norm_ev:
             return True
     return False
 

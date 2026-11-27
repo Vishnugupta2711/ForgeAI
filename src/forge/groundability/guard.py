@@ -131,8 +131,12 @@ def _compute_coverage(
     return coverage, key_term_overlap, round(max_rrf, 6)
 
 
+def _unwrap_pdf_hyphens(text: str) -> str:
+    return re.sub(r"([A-Za-z0-9])-\s*\n\s*([A-Za-z0-9])", r"\1-\2", text)
+
+
 def _normalize_ws(text: str) -> str:
-    return re.sub(r"\s+", " ", text).strip()
+    return re.sub(r"\s+", " ", _unwrap_pdf_hyphens(text)).strip()
 
 
 def _verify_quote_against_hits(
@@ -219,6 +223,8 @@ class GroundabilityGuard:
                 max_repairs=2,
             )
             topics = list(parsed.topics)
+        except LLMProviderError:
+            raise
         except Exception:
             topics = []
 
@@ -301,6 +307,8 @@ class GroundabilityGuard:
                 role="judge",
                 max_repairs=2,
             )
+        except LLMProviderError:
+            raise
         except Exception as exc:
             return TopicGroundability(
                 topic_id=topic.topic_id,

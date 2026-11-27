@@ -528,16 +528,25 @@ def build_report(
             continue
         for res in sc.results:
             if not res.verdict.passed:
+                is_contract_fail = res.answer_record.contract_failed or (
+                    res.answer_record.output.refusal_reason
+                    == "Model output failed output contract validation."
+                )
+                fail_cat = (
+                    "prompt_defect (contract_failure)"
+                    if is_contract_fail
+                    else (
+                        "wrong_refusal"
+                        if not res.verdict.refusal_ok
+                        else ("hallucination" if not res.verdict.grounded else "prompt_defect")
+                    )
+                )
                 failing_items.append(
                     {
                         "case_id": res.case_id,
                         "split": split_label,
                         "category": res.category,
-                        "failure_category": (
-                            "wrong_refusal"
-                            if not res.verdict.refusal_ok
-                            else ("hallucination" if not res.verdict.grounded else "prompt_defect")
-                        ),
+                        "failure_category": fail_cat,
                         "reasons": "; ".join(res.verdict.reasons),
                     }
                 )

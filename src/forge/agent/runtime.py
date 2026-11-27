@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from typing import Any
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -65,6 +66,26 @@ def _format_context_block(hits: list[SearchHit]) -> str:
             meta_parts.append(f"section={c.section_heading}")
         blocks.append(f"[{idx}] ({' | '.join(meta_parts)})\n{c.text}")
     return "\n\n".join(blocks)
+
+
+def _build_contract_schema_block(schema: dict[str, Any]) -> str:
+    """Render the machine-generated output contract JSON schema regardless of format_rules."""
+    props = sorted(schema.get("properties", {}).keys())
+    cit_schema = schema.get("properties", {}).get("citations", {})
+    cit_items = cit_schema.get("items", {}) if isinstance(cit_schema, dict) else {}
+    if isinstance(cit_items, dict) and "$ref" in cit_items:
+        ref_name = str(cit_items["$ref"]).rsplit("/", 1)[-1]
+        cit_items = schema.get("$defs", {}).get(ref_name, {})
+    cit_props = sorted(
+        cit_items.get("properties", {}).keys() if isinstance(cit_items, dict) else []
+    )
+    schema_json = json.dumps(schema, indent=2)
+    return (
+        "Authoritative Output Contract Schema (always overrides conflicting format text):\n"
+        f"- Required JSON top-level fields: {', '.join(props)}\n"
+        f"- Required keys inside every `citations` item: {', '.join(cit_props)}\n"
+        f"JSON Schema:\n{schema_json}"
+    )
 
 
 def _rerank_hits(query: str, hits: list[SearchHit]) -> list[SearchHit]:
@@ -191,23 +212,27 @@ class AgentRuntime:
         conversation: list[LLMMessage],
         contract_json: str,
         trace: list[str],
-    ) -> AgentOutput:
+        *,
+        max_repairs: int = 2,
+    ) -> tuple[AgentOutput, int, bool]:
         repair_tpl = load_prompt("agent_contract_repair.v1.md")
         current_raw = raw_content
         current_conv = list(conversation)
+        repairs_used = 0
 
-        for attempt in range(1, 4):
+        for attempt in range(1, max_repairs + 2):
             try:
                 parsed = extract_json_value(current_raw)
                 if not isinstance(parsed, dict):
                     raise ValueError("Final response must be a JSON object.")
                 cleaned = {k: v for k, v in parsed.items() if k != "action"}
-                return AgentOutput.model_validate(cleaned)
+                return AgentOutput.model_validate(cleaned), repairs_used, False
             except (ValueError, ValidationError) as exc:
                 err_msg = str(exc)
                 trace.append(f"output_contract validation error (attempt {attempt}): {err_msg}")
-                if attempt >= 3:
+                if repairs_used >= max_repairs:
                     break
+                repairs_used += 1
                 repair_prompt = repair_tpl.format(
                     error_message=err_msg,
                     output_contract_json=contract_json,
@@ -224,17 +249,21 @@ class AgentRuntime:
                     seed=self.definition.model.seed,
                     json_mode=True,
                     role="agent",
-                    attempt=attempt + 1,
+                    attempt=repairs_used + 1,
                 )
                 current_raw = repair_resp.content
 
         trace.append("output_contract repair exhausted; returning safe refusal fallback")
-        return AgentOutput(
-            answer="Unable to produce a schema-compliant grounded response.",
-            citations=[],
-            refused=True,
-            refusal_reason="Model output failed output contract validation.",
-            confidence=0.0,
+        return (
+            AgentOutput(
+                answer="Unable to produce a schema-compliant grounded response.",
+                citations=[],
+                refused=True,
+                refusal_reason="Model output failed output contract validation.",
+                confidence=0.0,
+            ),
+            repairs_used,
+            True,
         )
 
     def answer(
@@ -274,6 +303,9 @@ class AgentRuntime:
             history_block=_format_history_block(history),
             context_block=_format_context_block(hits),
             question=question,
+            contract_schema_block=_build_contract_schema_block(
+                self.definition.output_contract.json_schema
+            ),
         )
         conversation: list[LLMMessage] = [
             LLMMessage(role="system", content=system_prompt),
@@ -404,7 +436,9 @@ class AgentRuntime:
                 LLMMessage(role="user", content=obs_msg),
             ]
 
-        output = self._validate_contract(final_raw, conversation, contract_json, trace)
+        output, contract_repairs, contract_failed = self._validate_contract(
+            final_raw, conversation, contract_json, trace, max_repairs=2
+        )
         total_ms = round((time.perf_counter() - start) * 1000.0, 2)
 
         return AnswerRecord(
@@ -416,4 +450,6 @@ class AgentRuntime:
             effective_query=effective_query,
             latency_ms=total_ms,
             model=self.definition.model.name,
+            contract_repairs=contract_repairs,
+            contract_failed=contract_failed,
         )
