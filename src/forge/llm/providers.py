@@ -242,6 +242,7 @@ class OpenAICompatProvider:
         timeout_seconds: float = 120.0,
         *,
         append_v1: bool = True,
+        include_seed: bool = True,
         require_api_key: bool = False,
         api_key_env: str = "FORGE_OPENAI_API_KEY",
         requests_per_minute: float | None = None,
@@ -258,6 +259,7 @@ class OpenAICompatProvider:
         else:
             self.base_url = cleaned
         self.api_key = api_key
+        self.include_seed = include_seed
         self.require_api_key = require_api_key
         self.api_key_env = api_key_env
         self.timeout_seconds = timeout_seconds
@@ -375,7 +377,7 @@ class OpenAICompatProvider:
             "messages": [m.model_dump() for m in messages],
             "temperature": temperature,
         }
-        if seed is not None:
+        if seed is not None and self.include_seed:
             payload["seed"] = seed
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
@@ -468,6 +470,7 @@ class GeminiProvider(OpenAICompatProvider):
             api_key=api_key,
             timeout_seconds=timeout_seconds,
             append_v1=False,
+            include_seed=False,
             require_api_key=True,
             api_key_env="FORGE_GEMINI_API_KEY",
             requests_per_minute=requests_per_minute,

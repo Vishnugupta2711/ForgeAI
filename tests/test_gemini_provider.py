@@ -120,6 +120,8 @@ def test_gemini_429_backoff_quota_exhaustion_and_call_budget(tmp_path: Path) -> 
     attempts = {"count": 0}
 
     def _flaky_429(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content.decode("utf-8"))
+        assert "seed" not in body
         attempts["count"] += 1
         if attempts["count"] <= 2:
             return httpx.Response(
@@ -608,5 +610,11 @@ def test_live_gemini_json_and_embed() -> None:
         role="agent",
     )
     assert parsed.status
+    judge_parsed = client.json(
+        'Return ONLY JSON matching {"status":"ok","count":2}.',
+        schema=_SmokeSchema,
+        role="judge",
+    )
+    assert judge_parsed.status
     vecs = client.embed(["ForgeAI live Gemini embedding smoke test."])
     assert len(vecs) == 1 and len(vecs[0]) > 10
