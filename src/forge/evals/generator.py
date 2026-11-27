@@ -29,6 +29,7 @@ from forge.evals.models import (
 from forge.ingest.models import Chunk, CorpusProfile
 from forge.intake.models import RequirementsDocument
 from forge.llm.client import LLMClient
+from forge.llm.models import LLMProviderError
 from forge.retrieval.hybrid import HybridIndex
 
 
@@ -242,6 +243,8 @@ class EvalGenerator:
                     role="eval_writer",
                     max_repairs=2,
                 )
+            except LLMProviderError:
+                raise
             except Exception:
                 continue
 
@@ -296,6 +299,8 @@ class EvalGenerator:
                     role="eval_writer",
                     max_repairs=2,
                 )
+            except LLMProviderError:
+                raise
             except Exception:
                 continue
 
@@ -360,6 +365,8 @@ class EvalGenerator:
                 role="eval_writer",
                 max_repairs=2,
             )
+        except LLMProviderError:
+            raise
         except Exception:
             return []
 
@@ -412,6 +419,8 @@ class EvalGenerator:
                 role="eval_writer",
                 max_repairs=2,
             )
+        except LLMProviderError:
+            raise
         except Exception:
             return []
 
@@ -479,6 +488,8 @@ class EvalGenerator:
                 role="eval_writer",
                 max_repairs=2,
             )
+        except LLMProviderError:
+            raise
         except Exception:
             return []
 
@@ -540,11 +551,14 @@ class EvalGenerator:
         if len(doc_names) >= 2:
             for i in range(len(doc_names)):
                 for j in range(i + 1, len(doc_names)):
-                    chunk_pairs.append((doc_buckets[doc_names[i]][0], doc_buckets[doc_names[j]][0]))
-                    if len(doc_buckets[doc_names[i]]) > 1 and len(doc_buckets[doc_names[j]]) > 1:
-                        chunk_pairs.append(
-                            (doc_buckets[doc_names[i]][1], doc_buckets[doc_names[j]][1])
-                        )
+                    b_a = doc_buckets[doc_names[i]]
+                    b_b = doc_buckets[doc_names[j]]
+                    cand_a = [c for c in b_a if len(c.text.strip()) >= 120] or b_a
+                    cand_b = [c for c in b_b if len(c.text.strip()) >= 120] or b_b
+                    for idx_a in range(min(4, len(cand_a))):
+                        chunk_a = cand_a[(idx_a * 3) % len(cand_a)]
+                        chunk_b = cand_b[(idx_a * 5 + 1) % len(cand_b)]
+                        chunk_pairs.append((chunk_a, chunk_b))
         elif len(chunks) >= 2:
             for i in range(len(chunks) - 1):
                 chunk_pairs.append((chunks[i], chunks[i + 1]))

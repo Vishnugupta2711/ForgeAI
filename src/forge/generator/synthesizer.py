@@ -26,6 +26,7 @@ from forge.generator.tool_gate import ToolDecision, gate_tools
 from forge.ingest.models import CorpusProfile, Document
 from forge.intake.models import RequirementsDocument
 from forge.llm.client import LLMClient
+from forge.llm.models import LLMProviderError
 from forge.retrieval.hybrid import HybridIndex
 from forge.tools import ToolContext, ToolRegistry, default_registry
 
@@ -206,6 +207,8 @@ class AgentGenerator:
                 max_repairs=2,
             )
             return [p.name.strip() for p in parsed.proposed_tools if p.name.strip()]
+        except LLMProviderError:
+            raise
         except Exception:
             return []
 
@@ -254,12 +257,21 @@ class AgentGenerator:
                     "scope": requirements.scope,
                     "audience": requirements.audience,
                     "tone": requirements.tone,
+                    "must_answer_block": must_answer_block,
+                    "must_refuse_block": must_refuse_block,
                 },
             ).role.strip()
+        except LLMProviderError:
+            raise
         except Exception:
+            grounded_summary = (
+                ", ".join(t.title for t in requirements.must_answer_topics)
+                if requirements.must_answer_topics
+                else requirements.scope
+            )
             role_text = (
                 f"You are a grounded assistant for {requirements.audience}. "
-                f"{requirements.scope}"
+                f"Answer strictly from supplied documents regarding: {grounded_summary}."
             )
 
         try:
@@ -272,6 +284,8 @@ class AgentGenerator:
                     "must_refuse_block": must_refuse_block,
                 },
             ).scope.strip()
+        except LLMProviderError:
+            raise
         except Exception:
             scope_text = requirements.scope
 
@@ -285,6 +299,8 @@ class AgentGenerator:
                     "assumptions_block": assumptions_block,
                 },
             ).audience_tone.strip()
+        except LLMProviderError:
+            raise
         except Exception:
             audience_tone_text = (
                 f"Target audience: {requirements.audience}. Tone: {requirements.tone}."
@@ -299,6 +315,8 @@ class AgentGenerator:
                     "corpus_profile": profile.to_compact_text(),
                 },
             ).grounding_rules.strip()
+        except LLMProviderError:
+            raise
         except Exception:
             grounding_text = (
                 "Cite verbatim quoted evidence (doc_id, chunk_id, quote) from retrieved chunks "
@@ -322,6 +340,8 @@ class AgentGenerator:
                     "gaps_block": gaps_block,
                 },
             ).refusal_policy.strip()
+        except LLMProviderError:
+            raise
         except Exception:
             refusal_text = (
                 "If a question asks about excluded topics or unsupported gaps, "
@@ -351,6 +371,8 @@ class AgentGenerator:
                 _FormatRulesOutput,
                 {"attached_tools": tools_str},
             ).format_rules.strip()
+        except LLMProviderError:
+            raise
         except Exception:
             format_text = (
                 "Return valid JSON matching the output contract: answer, citations "
@@ -368,6 +390,8 @@ class AgentGenerator:
                 },
             ).extra_rules
             extra_rules = [r.strip() for r in extra_rules if r.strip()][:5]
+        except LLMProviderError:
+            raise
         except Exception:
             extra_rules = [
                 "Use only attached tools listed in this definition.",

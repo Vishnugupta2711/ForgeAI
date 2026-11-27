@@ -21,6 +21,7 @@ from forge.intake.models import (
     RequirementTopic,
 )
 from forge.llm.client import LLMClient
+from forge.llm.models import LLMProviderError
 
 MAX_INTAKE_QUESTIONS = 5
 
@@ -96,6 +97,8 @@ class IntakeInterviewer:
                 max_repairs=2,
             )
             raw_questions = parsed.questions
+        except LLMProviderError:
+            raise
         except Exception:
             raw_questions = []
 
@@ -187,6 +190,8 @@ class IntakeInterviewer:
             )
             for item in parsed.answers:
                 by_id[item.question_id.strip()] = item.answer.strip()
+        except LLMProviderError:
+            raise
         except Exception:
             by_id = {}
 
@@ -234,6 +239,8 @@ class IntakeInterviewer:
                 role="agent",
                 max_repairs=2,
             )
+        except LLMProviderError:
+            raise
         except Exception:
             synth = _SynthesizedRequirements(
                 scope=f"Answer questions grounded in the provided documents for: {brief.strip()}",

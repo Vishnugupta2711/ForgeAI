@@ -511,3 +511,54 @@ def test_rehearsal_runs_and_time_budget_degradation(tmp_path: Path, monkeypatch)
     assert req_b.groundability_report is not None
     assert req_b.groundability_report.unsupported_count >= 1
     assert any(r.from_gap for r in req_b.must_refuse_topics)
+
+
+def test_pdf_hyphen_unwrap_and_provider_error_fails_cleanly(tmp_path: Path) -> None:
+    """Verify PDF hyphenated line-breaks match quotes and Ollama down fails cleanly."""
+    from forge.evals.gates import normalize_text
+    from forge.groundability.guard import _verify_quote_against_hits
+    from forge.ingest.models import Chunk
+    from forge.judge.deterministic import verify_quote_in_evidence
+    from forge.pipeline.runner import PipelineExecutionError
+    from forge.retrieval.models import SearchHit
+
+    chunk = Chunk(
+        chunk_id="pol.pdf::c1",
+        doc_id="pol.pdf",
+        text="Business travel requires line-manager pre-\napproval at least 7 days prior.",
+    )
+    hit = SearchHit(chunk=chunk, score=0.02, bm25_score=1.0, dense_score=0.0)
+    ok, doc_id, cid = _verify_quote_against_hits(
+        "line-manager pre-approval at least 7 days prior", "pol.pdf::c1", [hit]
+    )
+    assert ok is True
+    assert doc_id == "pol.pdf"
+    assert cid == "pol.pdf::c1"
+    assert verify_quote_in_evidence(
+        "line-manager pre-approval at least 7 days prior", [chunk.text]
+    )
+    assert "pre-approval" in normalize_text(chunk.text)
+
+    # Provider connection failure must abort pipeline cleanly & write partial report
+    def connect_fail(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("Connection refused", request=request)
+
+    down_client = LLMClient(
+        provider=OllamaProvider(transport=httpx.MockTransport(connect_fail)),
+        cache_enabled=False,
+    )
+    out_down = tmp_path / "ollama_down"
+    with pytest.raises(PipelineExecutionError) as exc_info:
+        ForgePipeline(down_client, bm25_only=True).run(
+            brief="Answer questions about office printer setup.",
+            docs_dir=REHEARSAL_UNSUPPORTED / "docs",
+            out_dir=out_down,
+            mode="auto",
+            fast=True,
+        )
+    assert exc_info.value.stage == "intake"
+    assert "ollama serve" in str(exc_info.value).lower()
+    partial_report = (out_down / "report.md").read_text(encoding="utf-8")
+    assert "Partial Run Warning" in partial_report
+    assert "ollama serve" in partial_report.lower()
+

@@ -30,6 +30,7 @@ from forge.judge.models import (
     EvalScorecard,
 )
 from forge.llm.client import LLMClient
+from forge.llm.models import LLMProviderError
 
 
 class _ExtractedClaims(BaseModel):
@@ -139,6 +140,8 @@ class Judge:
                 max_repairs=2,
             )
             claims = [c.strip() for c in extracted.claims if c.strip()]
+        except LLMProviderError:
+            raise
         except Exception as exc:
             notes.append(f"Claim extraction failed ({exc}); using deterministic groundedness.")
             return deterministic_ok, [], True, notes
@@ -149,6 +152,8 @@ class Judge:
         # Pass 1: forward order
         try:
             pass1 = self._verify_claims_pass(claims, evidence_block, evidence_texts)
+        except LLMProviderError:
+            raise
         except Exception as exc:
             notes.append(f"Claim verification pass 1 failed ({exc}); deterministic fallback.")
             return deterministic_ok, [], True, notes
@@ -163,6 +168,8 @@ class Judge:
                     shuffled = list(reversed(claims))
             try:
                 pass2 = self._verify_claims_pass(shuffled, evidence_block, evidence_texts)
+            except LLMProviderError:
+                raise
             except Exception as exc:
                 notes.append(f"Claim verification pass 2 failed ({exc}); deterministic fallback.")
                 return deterministic_ok, list(pass1.values()), True, notes
@@ -220,6 +227,8 @@ class Judge:
             first = _call(key_facts)
             second_order = list(reversed(key_facts)) if len(key_facts) >= 2 else list(key_facts)
             second = _call(second_order) if len(key_facts) >= 2 else first
+        except LLMProviderError:
+            raise
         except Exception as exc:
             return (
                 deterministic_fallback,

@@ -33,8 +33,9 @@ class _OosAnswerabilityVerdict(BaseModel):
 
 
 def normalize_text(text: str) -> str:
-    """Lowercase and collapse whitespace for resilient substring/fuzzy checks."""
-    return _WHITESPACE_RE.sub(" ", text.lower()).strip()
+    """Lowercase, unwrap PDF hyphen line-breaks, and collapse whitespace."""
+    unwrapped = re.sub(r"([A-Za-z0-9])-\s*\n\s*([A-Za-z0-9])", r"\1-\2", text)
+    return _WHITESPACE_RE.sub(" ", unwrapped.lower()).strip()
 
 
 def verify_key_fact(fact: str, source_text: str, *, threshold: float = 0.80) -> bool:
@@ -149,6 +150,8 @@ def check_solvability(
             max_repairs=2,
         )
         return verdict.solvable, verdict.reason
+    except LLMProviderError:
+        raise
     except Exception as exc:
         return False, f"solvability_check_error: {exc}"
 
@@ -204,6 +207,8 @@ def check_oos_unanswerable(
         if verdict.answerable_from_docs:
             return False, f"answerable_from_docs: {verdict.reason}"
         return True, verdict.reason
+    except LLMProviderError:
+        raise
     except Exception as exc:
         return False, f"oos_check_error: {exc}"
 
