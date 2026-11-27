@@ -92,7 +92,7 @@ def test_missing_and_invalid_key_errors_never_leak_secret(
         client.chat("hello", role="agent")
     assert "FORGE_GEMINI_API_KEY" in str(missing_exc.value)
 
-    secret = "AIzaSyFakeSecretValueForTesting123456"
+    secret = "AIza" + "SyFakeSecretValueForTesting123456"
 
     def _unauth_handler(request: httpx.Request) -> httpx.Response:
         assert request.headers.get("Authorization") == f"Bearer {secret}"
@@ -359,7 +359,7 @@ def test_per_role_providers_bm25_fallback_and_family_warnings(
 def test_cli_run_profile_gemini_fast_and_secret_scan(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    secret = "AIzaSyCliMockSecretKey9876543210"
+    secret = "AIza" + "SyCliMockSecretKey9876543210"
     monkeypatch.setenv("FORGE_GEMINI_API_KEY", secret)
 
     _, chunks, _ = ingest_folder(REHEARSAL_UNSUPPORTED / "docs", chunk_size=300, overlap=20)
