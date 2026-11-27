@@ -379,6 +379,14 @@ class AgentGenerator:
                 "(required whenever refused is false), refused, refusal_reason, confidence."
             )
 
+        # Deterministic check: format_rules MUST specify all three Citation keys
+        lower_fmt = format_text.lower()
+        if "quote" not in lower_fmt or "chunk_id" not in lower_fmt or "doc_id" not in lower_fmt:
+            format_text = (
+                f"{format_text} Each item in `citations` MUST be a JSON object with keys "
+                "`doc_id`, `chunk_id`, and `quote` (exact verbatim substring from context)."
+            )
+
         try:
             extra_rules = _call_section(
                 "generate_extra_rules.v1.md",
@@ -387,6 +395,7 @@ class AgentGenerator:
                     "assumptions_block": assumptions_block,
                     "attached_tools": tools_str,
                     "must_answer_block": must_answer_block,
+                    "must_refuse_block": must_refuse_block,
                 },
             ).extra_rules
             extra_rules = [r.strip() for r in extra_rules if r.strip()][:5]

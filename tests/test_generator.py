@@ -442,6 +442,9 @@ def test_generator_end_to_end_and_determinism_with_cache(tmp_path: Path) -> None
     assert (out1 / "generation_log.json").is_file()
     assert defn1.attached_tool_names() == ["csv_lookup"]
     assert "quote" in defn1.system_prompt.grounding_rules.lower()
+    assert "doc_id" in defn1.system_prompt.format_rules.lower()
+    assert "chunk_id" in defn1.system_prompt.format_rules.lower()
+    assert "quote" in defn1.system_prompt.format_rules.lower()
     assert "Vendor Pricing" in defn1.system_prompt.refusal_policy
     assert "don't cover" in defn1.system_prompt.refusal_policy.lower()
     assert len(log1.smoke_test_results) == 3
