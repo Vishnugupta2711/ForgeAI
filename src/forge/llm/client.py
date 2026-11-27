@@ -12,7 +12,7 @@ from typing import Any, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
-from forge.config import ForgeConfig, load_config, load_prompt
+from forge.config import ForgeConfig, get_gemini_api_key, load_config, load_prompt
 from forge.llm.models import (
     LLMMessage,
     LLMProviderError,
@@ -22,6 +22,7 @@ from forge.llm.models import (
 )
 from forge.llm.providers import (
     FakeProvider,
+    GeminiProvider,
     LLMProvider,
     OllamaProvider,
     OpenAICompatProvider,
@@ -88,17 +89,58 @@ class LLMClient:
         self,
         provider: LLMProvider,
         *,
+        providers_by_role: dict[str, LLMProvider] | None = None,
         config: ForgeConfig | None = None,
         cache_dir: Path | str | None = None,
         usage_log_path: Path | str | None = None,
         cache_enabled: bool = True,
+        max_calls_per_run: int | None = None,
     ) -> None:
         self.provider = provider
+        self.providers_by_role = dict(providers_by_role or {})
         self.config = config or ForgeConfig()
         self.cache_enabled = cache_enabled and (cache_dir is not None)
         self.cache_dir = Path(cache_dir) if cache_dir is not None else None
         self.usage_log_path = Path(usage_log_path) if usage_log_path is not None else None
         self.usage_records: list[UsageRecord] = []
+        self.max_calls_per_run = (
+            max_calls_per_run
+            if max_calls_per_run is not None
+            else self.config.budgets.max_calls_per_run
+        )
+        self._live_calls = 0
+
+    @staticmethod
+    def _build_provider(name: str, cfg: ForgeConfig) -> LLMProvider:
+        rl = cfg.rate_limits
+        if name == "ollama":
+            return OllamaProvider(
+                base_url=cfg.endpoints.ollama_base_url,
+                timeout_seconds=cfg.endpoints.timeout_seconds,
+                max_http_retries=rl.max_http_retries,
+                backoff_seconds=rl.backoff_seconds,
+            )
+        if name == "openai_compat":
+            return OpenAICompatProvider(
+                base_url=cfg.endpoints.openai_compat_base_url,
+                api_key=cfg.endpoints.openai_api_key,
+                timeout_seconds=cfg.endpoints.timeout_seconds,
+                requests_per_minute=rl.requests_per_minute,
+                max_concurrency=rl.max_concurrency,
+                max_http_retries=rl.max_http_retries,
+                backoff_seconds=rl.backoff_seconds,
+            )
+        if name == "gemini":
+            return GeminiProvider(
+                api_key=get_gemini_api_key(),
+                base_url=cfg.endpoints.gemini_base_url,
+                timeout_seconds=cfg.endpoints.timeout_seconds,
+                requests_per_minute=rl.requests_per_minute,
+                max_concurrency=rl.max_concurrency,
+                max_http_retries=rl.max_http_retries,
+                backoff_seconds=rl.backoff_seconds,
+            )
+        raise LLMProviderError(f"Unsupported provider: {name}")
 
     @classmethod
     def from_config(
@@ -108,33 +150,42 @@ class LLMClient:
         usage_log_path: Path | str | None = None,
         cache_dir: Path | str | None = None,
     ) -> LLMClient:
-        """Construct an LLMClient from ForgeConfig (selecting Ollama or OpenAI-compatible)."""
+        """Construct an LLMClient from ForgeConfig with optional per-role routing."""
         cfg = config or load_config()
-        if cfg.endpoints.provider == "ollama":
-            provider: LLMProvider = OllamaProvider(
-                base_url=cfg.endpoints.ollama_base_url,
-                timeout_seconds=cfg.endpoints.timeout_seconds,
-            )
-        elif cfg.endpoints.provider == "openai_compat":
-            provider = OpenAICompatProvider(
-                base_url=cfg.endpoints.openai_compat_base_url,
-                api_key=cfg.endpoints.openai_api_key,
-                timeout_seconds=cfg.endpoints.timeout_seconds,
-            )
-        else:
-            raise LLMProviderError(f"Unsupported provider: {cfg.endpoints.provider}")
+        pool: dict[str, LLMProvider] = {}
+        default_provider = cls._build_provider(cfg.endpoints.provider, cfg)
+        pool[cfg.endpoints.provider] = default_provider
+
+        role_map: dict[str, LLMProvider] = {}
+        for role_name in ("agent", "judge", "eval_writer", "embed"):
+            pname = cfg.provider_for_role(role_name)
+            if pname not in pool:
+                pool[pname] = cls._build_provider(pname, cfg)
+            role_map[role_name] = pool[pname]
 
         resolved_cache: Path | None = None
         if cfg.cache.enabled:
             resolved_cache = Path(cache_dir) if cache_dir is not None else Path(cfg.cache.dir)
 
         return cls(
-            provider=provider,
+            provider=default_provider,
+            providers_by_role=role_map,
             config=cfg,
             cache_dir=resolved_cache,
             usage_log_path=usage_log_path,
             cache_enabled=cfg.cache.enabled,
+            max_calls_per_run=cfg.budgets.max_calls_per_run,
         )
+
+    def _provider_for_role(self, role: str) -> LLMProvider:
+        return self.providers_by_role.get(role, self.provider)
+
+    def _check_call_budget(self) -> None:
+        if self.max_calls_per_run is not None and self._live_calls >= self.max_calls_per_run:
+            raise LLMProviderError(
+                f"Per-run LLM call budget exhausted ({self.max_calls_per_run} live calls). "
+                "Increase budgets.max_calls_per_run or use --fast."
+            )
 
     def _model_for_role(self, role: str) -> str:
         mapping = {
@@ -199,6 +250,7 @@ class LLMClient:
         """Send a chat completion request with disk caching and usage logging."""
         norm_messages = _normalize_messages(messages)
         resolved_model = model or self._model_for_role(role)
+        active_provider = self._provider_for_role(role)
         resolved_temp = (
             self.config.generation.temperature if temperature is None else temperature
         )
@@ -207,7 +259,7 @@ class LLMClient:
         key = _cache_key(
             {
                 "op": "chat",
-                "provider": self.provider.name,
+                "provider": active_provider.name,
                 "model": resolved_model,
                 "messages": [m.model_dump() for m in norm_messages],
                 "temperature": resolved_temp,
@@ -238,8 +290,10 @@ class LLMClient:
             )
             return response
 
+        self._check_call_budget()
+        self._live_calls += 1
         try:
-            response = self.provider.chat(
+            response = active_provider.chat(
                 norm_messages,
                 model=resolved_model,
                 temperature=resolved_temp,
@@ -251,7 +305,7 @@ class LLMClient:
                 UsageRecord(
                     operation="chat",
                     role=role,
-                    provider=self.provider.name,
+                    provider=active_provider.name,
                     model=resolved_model,
                     attempt=attempt,
                     status="error",
@@ -340,11 +394,15 @@ class LLMClient:
         if not batch:
             return []
 
-        resolved_model = model or self.config.models.embed
+        resolved_model = (model if model is not None else self.config.models.embed).strip()
+        if not resolved_model or resolved_model.lower() in {"none", "bm25"}:
+            raise LLMProviderError("No embedding model configured; falling back to BM25-only.")
+
+        active_provider = self._provider_for_role("embed")
         key = _cache_key(
             {
                 "op": "embed",
-                "provider": self.provider.name,
+                "provider": active_provider.name,
                 "model": resolved_model,
                 "texts": batch,
             }
@@ -358,7 +416,7 @@ class LLMClient:
                 UsageRecord(
                     operation="embed",
                     role="embed",
-                    provider=self.provider.name,
+                    provider=active_provider.name,
                     model=resolved_model,
                     prompt_tokens=int(cached_payload.get("prompt_tokens", 0)),
                     total_tokens=int(cached_payload.get("prompt_tokens", 0)),
@@ -369,15 +427,17 @@ class LLMClient:
             )
             return vectors
 
+        self._check_call_budget()
+        self._live_calls += 1
         try:
-            result = self.provider.embed(batch, model=resolved_model)
+            result = active_provider.embed(batch, model=resolved_model)
         except Exception as exc:
             elapsed = (time.perf_counter() - start) * 1000.0
             self._log_usage(
                 UsageRecord(
                     operation="embed",
                     role="embed",
-                    provider=self.provider.name,
+                    provider=active_provider.name,
                     model=resolved_model,
                     latency_ms=round(elapsed, 2),
                     status="error",

@@ -15,7 +15,7 @@ from rich.table import Table
 from forge import __version__
 from forge.agent.runtime import AgentRuntime
 from forge.agent.schema import AgentDefinition, AnswerRecord
-from forge.config import load_config
+from forge.config import ForgeConfig, load_config
 from forge.evals import EvalGenerator, EvalSet
 from forge.generator import AgentGenerator, GenerationLog
 from forge.groundability import GroundabilityGuard, StrictGroundabilityError
@@ -42,11 +42,36 @@ evals_app = typer.Typer(
 )
 app.add_typer(evals_app, name="evals")
 console = Console()
+_CLI_PROFILE: str | None = None
+
+
+def _resolve_profile(profile: str | None) -> str | None:
+    return profile if profile is not None else _CLI_PROFILE
+
+
+def _load_cli_config(profile: str | None = None, *, warn_privacy: bool = True) -> ForgeConfig:
+    try:
+        cfg = load_config(profile=_resolve_profile(profile))
+    except FileNotFoundError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=2) from exc
+    if warn_privacy:
+        notice = cfg.privacy_notice()
+        if notice:
+            console.print(f"[yellow]{notice}[/yellow]")
+    return cfg
 
 
 @app.callback()
-def main() -> None:
+def main(
+    profile: Annotated[
+        str | None,
+        typer.Option("--profile", help="Config profile (e.g. 'default', 'gemini')."),
+    ] = None,
+) -> None:
     """ForgeAI CLI root command."""
+    global _CLI_PROFILE
+    _CLI_PROFILE = profile
 
 
 @app.command()
@@ -72,8 +97,14 @@ def ingest(
     json_output: Annotated[
         bool, typer.Option("--json", help="Print raw JSON corpus profile.")
     ] = False,
+    profile: Annotated[
+        str | None,
+        typer.Option("--profile", help="Config profile (e.g. 'default', 'gemini')."),
+    ] = None,
 ) -> None:
     """Ingest a document folder and print a compact corpus profile."""
+    if profile is not None:
+        _load_cli_config(profile, warn_privacy=False)
     _, _, corpus_profile = ingest_folder(folder, chunk_size=chunk_size, overlap=overlap)
 
     if run_dir is not None:
@@ -159,9 +190,13 @@ def search(
         bool,
         typer.Option("--bm25-only", help="Skip embedding calls and score with BM25 only."),
     ] = False,
+    profile: Annotated[
+        str | None,
+        typer.Option("--profile", help="Config profile (e.g. 'default', 'gemini')."),
+    ] = None,
 ) -> None:
     """Ingest/load a folder index and print ranked chunks with RRF scores."""
-    cfg = load_config()
+    cfg = _load_cli_config(profile, warn_privacy=not bm25_only)
     usage_log = (run_dir / "usage.jsonl") if run_dir is not None else None
     llm_client: LLMClient | None = (
         None if bm25_only else LLMClient.from_config(cfg, usage_log_path=usage_log)
@@ -273,14 +308,22 @@ def _build_runtime_for_chat(
     *,
     run_dir: Path | None,
     bm25_only: bool,
+    profile: str | None = None,
     llm_client: LLMClient | None = None,
 ) -> AgentRuntime:
-    cfg = load_config().model_copy(deep=True)
+    cfg = _load_cli_config(profile, warn_privacy=False).model_copy(deep=True)
     cfg.endpoints.provider = definition.model.provider
+    cfg.endpoints.role_providers["agent"] = definition.model.provider
+    if definition.model.embed_provider is not None:
+        cfg.endpoints.role_providers["embed"] = definition.model.embed_provider
     cfg.models.agent = definition.model.name
     cfg.models.embed = definition.model.embed_model
     cfg.generation.temperature = definition.model.temperature
     cfg.generation.seed = definition.model.seed
+    if llm_client is None:
+        notice = cfg.privacy_notice()
+        if notice:
+            console.print(f"[yellow]{notice}[/yellow]")
 
     usage_log = (run_dir / "usage.jsonl") if run_dir is not None else None
     client = llm_client or LLMClient.from_config(cfg, usage_log_path=usage_log)
@@ -345,11 +388,17 @@ def chat(
         bool,
         typer.Option("--bm25-only", help="Build index without dense embedding calls."),
     ] = False,
+    profile: Annotated[
+        str | None,
+        typer.Option("--profile", help="Config profile (e.g. 'default', 'gemini')."),
+    ] = None,
 ) -> None:
     """Run an interactive multi-turn chat session using any declarative AgentDefinition."""
     definition = AgentDefinition.load_yaml(definition_path)
+    resolved_prof = _resolve_profile(profile)
+    extra_kwargs: dict[str, str] = {"profile": resolved_prof} if resolved_prof is not None else {}
     runtime = _build_runtime_for_chat(
-        definition, docs, run_dir=run_dir, bm25_only=bm25_only
+        definition, docs, run_dir=run_dir, bm25_only=bm25_only, **extra_kwargs
     )
 
     console.print(
@@ -397,10 +446,11 @@ def _run_intake_pipeline(
     answers_path: Path | None,
     strict: bool,
     bm25_only: bool,
+    profile: str | None = None,
     llm_client: LLMClient | None = None,
 ) -> RequirementsDocument:
     out_dir.mkdir(parents=True, exist_ok=True)
-    cfg = load_config()
+    cfg = _load_cli_config(profile)
     client = llm_client or LLMClient.from_config(cfg, usage_log_path=out_dir / "usage.jsonl")
 
     _, chunks, profile = ingest_folder(docs)
@@ -470,6 +520,10 @@ def intake(
         bool,
         typer.Option("--bm25-only", help="Build index without dense embedding calls."),
     ] = False,
+    profile: Annotated[
+        str | None,
+        typer.Option("--profile", help="Config profile (e.g. 'default', 'gemini')."),
+    ] = None,
 ) -> None:
     """Run clarifying intake and groundability guard to produce requirements.json/.md."""
     if auto and answers is not None:
@@ -489,6 +543,7 @@ def intake(
             answers_path=answers,
             strict=strict,
             bm25_only=bm25_only,
+            profile=profile,
         )
     except StrictGroundabilityError as exc:
         console.print(f"[red]{exc}[/red]")
@@ -524,10 +579,11 @@ def _run_generate_pipeline(
     agent_name: str | None,
     bm25_only: bool,
     run_smoke: bool,
+    profile: str | None = None,
     llm_client: LLMClient | None = None,
 ) -> tuple[AgentDefinition, GenerationLog]:
     out_dir.mkdir(parents=True, exist_ok=True)
-    cfg = load_config()
+    cfg = _load_cli_config(profile)
     client = llm_client or LLMClient.from_config(cfg, usage_log_path=out_dir / "usage.jsonl")
     requirements = RequirementsDocument.model_validate_json(
         requirements_path.read_text(encoding="utf-8")
@@ -598,6 +654,10 @@ def generate(
         bool,
         typer.Option("--no-smoke", help="Skip post-generation 3-question smoke test."),
     ] = False,
+    profile: Annotated[
+        str | None,
+        typer.Option("--profile", help="Config profile (e.g. 'default', 'gemini')."),
+    ] = None,
 ) -> None:
     """Generate definition.yaml and generation_log.json from requirements and docs."""
     definition, gen_log = _run_generate_pipeline(
@@ -607,6 +667,7 @@ def generate(
         agent_name=name,
         bm25_only=bm25_only,
         run_smoke=not no_smoke,
+        profile=profile,
     )
     attached = definition.attached_tool_names()
     console.print(
@@ -631,10 +692,11 @@ def _run_evals_generate_pipeline(
     out_dir: Path,
     seed: int | None,
     bm25_only: bool,
+    profile: str | None = None,
     llm_client: LLMClient | None = None,
 ) -> EvalSet:
     out_dir.mkdir(parents=True, exist_ok=True)
-    cfg = load_config()
+    cfg = _load_cli_config(profile)
     client = llm_client or LLMClient.from_config(cfg, usage_log_path=out_dir / "usage.jsonl")
     definition = AgentDefinition.load_yaml(definition_path)
     requirements = RequirementsDocument.model_validate_json(
@@ -716,6 +778,10 @@ def evals_generate(
         bool,
         typer.Option("--bm25-only", help="Build index without dense embedding calls."),
     ] = False,
+    profile: Annotated[
+        str | None,
+        typer.Option("--profile", help="Config profile (e.g. 'default', 'gemini')."),
+    ] = None,
 ) -> None:
     """Generate a verified dev/held_out evaluation set from corpus documents."""
     eval_set = _run_evals_generate_pipeline(
@@ -725,6 +791,7 @@ def evals_generate(
         out_dir=out,
         seed=seed,
         bm25_only=bm25_only,
+        profile=profile,
     )
     console.print(
         Panel(
@@ -748,10 +815,11 @@ def _run_evals_suite_pipeline(
     split: str,
     out_dir: Path,
     bm25_only: bool,
+    profile: str | None = None,
     llm_client: LLMClient | None = None,
 ) -> EvalScorecard:
     out_dir.mkdir(parents=True, exist_ok=True)
-    cfg = load_config()
+    cfg = _load_cli_config(profile)
     client = llm_client or LLMClient.from_config(cfg, usage_log_path=out_dir / "usage.jsonl")
     definition = AgentDefinition.load_yaml(definition_path)
     eval_set = EvalSet.model_validate_json(eval_set_path.read_text(encoding="utf-8"))
@@ -840,6 +908,10 @@ def evals_run(
         bool,
         typer.Option("--bm25-only", help="Build index without dense embedding calls."),
     ] = False,
+    profile: Annotated[
+        str | None,
+        typer.Option("--profile", help="Config profile (e.g. 'default', 'gemini')."),
+    ] = None,
 ) -> None:
     """Run an agent definition against an eval set and score with ForgeAI Judge."""
     scorecard = _run_evals_suite_pipeline(
@@ -849,6 +921,7 @@ def evals_run(
         split=split,
         out_dir=out,
         bm25_only=bm25_only,
+        profile=profile,
     )
     console.print(
         Panel(
@@ -868,10 +941,11 @@ def _run_judge_selftest_pipeline(
     docs: Path,
     eval_set_path: Path | None,
     out_dir: Path,
+    profile: str | None = None,
     llm_client: LLMClient | None = None,
 ) -> JudgeReliabilityReport:
     out_dir.mkdir(parents=True, exist_ok=True)
-    cfg = load_config()
+    cfg = _load_cli_config(profile)
     client = llm_client or LLMClient.from_config(cfg, usage_log_path=out_dir / "usage.jsonl")
     _, chunks, _ = ingest_folder(docs)
     chunk_map = {c.chunk_id: c for c in chunks}
@@ -903,10 +977,14 @@ def judge_selftest(
         Path,
         typer.Option("--out", help="Output directory for judge_reliability.json."),
     ] = Path("runs/judge_selftest"),
+    profile: Annotated[
+        str | None,
+        typer.Option("--profile", help="Config profile (e.g. 'default', 'gemini')."),
+    ] = None,
 ) -> None:
     """Run canary reliability self-test for the ForgeAI Judge."""
     report = _run_judge_selftest_pipeline(
-        docs=docs, eval_set_path=eval_set, out_dir=out
+        docs=docs, eval_set_path=eval_set, out_dir=out, profile=profile
     )
     table = Table(title=f"Judge Self-Test Reliability ({report.judge_model})")
     table.add_column("Canary Type", style="cyan")
@@ -936,6 +1014,7 @@ def _run_optimize_pipeline(
     docs: Path | None,
     max_iters: int,
     bm25_only: bool,
+    profile: str | None = None,
     llm_client: LLMClient | None = None,
 ) -> OptimizationScorecard:
     def_path = run_dir / "definition.yaml"
@@ -957,7 +1036,7 @@ def _run_optimize_pipeline(
             "Could not resolve --docs directory from arguments or profile.json."
         )
 
-    cfg = load_config()
+    cfg = _load_cli_config(profile)
     client = llm_client or LLMClient.from_config(cfg, usage_log_path=run_dir / "usage.jsonl")
     definition = AgentDefinition.load_yaml(def_path)
     eval_set = EvalSet.model_validate_json(eval_path.read_text(encoding="utf-8"))
@@ -997,6 +1076,10 @@ def optimize(
         bool,
         typer.Option("--bm25-only", help="Build retrieval index without dense embeddings."),
     ] = False,
+    profile: Annotated[
+        str | None,
+        typer.Option("--profile", help="Config profile (e.g. 'default', 'gemini')."),
+    ] = None,
 ) -> None:
     """Run targeted critic-optimizer loop on dev evals and score held-out once at the end."""
     opt_scorecard = _run_optimize_pipeline(
@@ -1004,6 +1087,7 @@ def optimize(
         docs=docs,
         max_iters=max_iters,
         bm25_only=bm25_only,
+        profile=profile,
     )
     console.print(
         Panel(
@@ -1032,10 +1116,11 @@ def _run_full_pipeline_cli(
     resume: bool,
     time_budget_min: float | None,
     bm25_only: bool,
+    profile: str | None = None,
     llm_client: LLMClient | None = None,
 ) -> PipelineState:
     out_dir.mkdir(parents=True, exist_ok=True)
-    cfg = load_config()
+    cfg = _load_cli_config(profile)
     client = llm_client or LLMClient.from_config(cfg, usage_log_path=out_dir / "usage.jsonl")
 
     def _progress(stage: str, status: str, elapsed: float | None) -> None:
@@ -1115,6 +1200,10 @@ def run(
         bool,
         typer.Option("--bm25-only", help="Build retrieval index without dense embeddings."),
     ] = False,
+    profile: Annotated[
+        str | None,
+        typer.Option("--profile", help="Config profile (e.g. 'default', 'gemini')."),
+    ] = None,
 ) -> None:
     """Run the full ForgeAI factory end-to-end and write report.md + scorecard.csv."""
     if auto and answers is not None:
@@ -1138,6 +1227,7 @@ def run(
             resume=resume,
             time_budget_min=time_budget_min,
             bm25_only=bm25_only,
+            profile=profile,
         )
     except LLMProviderError as exc:
         console.print(Panel(str(exc), title="LLM Provider Error", border_style="red"))

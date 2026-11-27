@@ -337,11 +337,21 @@ def build_report(
         lines.append("")
 
     # 1. Run Summary
-    models_str = (
-        json.dumps(definition.meta.provenance.model_names)
-        if definition and definition.meta.provenance.model_names
-        else "unknown"
+    profile_val = state.get("profile") or (
+        definition.meta.provenance.profile if definition else "default"
     )
+    providers_map = (
+        state.get("providers")
+        or (definition.meta.provenance.providers if definition else None)
+        or ({"agent": definition.model.provider} if definition else {})
+    )
+    providers_str = json.dumps(providers_map) if providers_map else "unknown"
+    models_map = (
+        (definition.meta.provenance.model_names if definition else None)
+        or state.get("models")
+        or {}
+    )
+    models_str = json.dumps(models_map) if models_map else "unknown"
     seed_val = (
         eval_set.seed
         if eval_set
@@ -352,6 +362,8 @@ def build_report(
             "## 1. Run Summary",
             f"- **Forge Version**: `{__version__}`",
             f"- **Agent Definition Version**: `{definition.meta.version if definition else 'n/a'}`",
+            f"- **Profile**: `{profile_val}`",
+            f"- **Providers**: `{providers_str}`",
             f"- **Models**: `{models_str}`",
             f"- **Seed**: `{seed_val}`",
             f"- **Fast Mode**: `{state.get('fast_mode', False)}`",
@@ -562,13 +574,18 @@ def build_report(
         lines.append("- Judge self-test reliability report not available.")
 
     active_sc = final_held or final_dev
-    if active_sc and (active_sc.same_model_as_agent or active_sc.same_family_as_agent):
+    if active_sc and active_sc.same_model_as_agent:
         lines.append(
-            "- **⚠️ Same-Model / Family Warning**: Judge and agent models share the same "
-            f"model (`{active_sc.same_model_as_agent}`) or family "
-            f"(`{active_sc.same_family_as_agent}`), which risks self-preference bias."
+            "- **⚠️ Same-Model Warning**: Agent and Judge use the exact same model "
+            f"(`{active_sc.agent_model}`), risking self-preference bias."
         )
-    elif active_sc:
+    if active_sc and active_sc.same_family_as_agent:
+        lines.append(
+            "- **⚠️ Same-Model-Family Warning**: Agent (`"
+            f"{active_sc.agent_model}`) and Judge (`{active_sc.judge_model}`) share the same "
+            "model family, which can introduce correlated bias."
+        )
+    if active_sc and not (active_sc.same_model_as_agent or active_sc.same_family_as_agent):
         lines.append(
             f"- **Model Separation Verified**: Agent (`{active_sc.agent_model}`) and Judge "
             f"(`{active_sc.judge_model}`) use distinct model families."

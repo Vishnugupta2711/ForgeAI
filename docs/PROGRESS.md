@@ -125,3 +125,14 @@
   - Wrote top-level `README.md` with install, model setup, quickstart, architecture, design decisions, and honest limitations
 - **Verification**:
   - `pytest -q` (88 passed) and `ruff check .` passed cleanly. Note: Phase 9 live-model demo corpora remain on branch `phase-9-demos` pending an active Ollama instance.
+
+### Phase 11g — Switchable Gemini Provider Profile (`phase-11g-gemini-provider`)
+- **Status**: Complete
+- **Deliverables**:
+  - Verified official Gemini API documentation (`https://ai.google.dev/gemini-api/docs/{openai,models,choosing-a-model,embeddings,rate-limits}`) in `docs/GEMINI.md`
+  - Added `forge.gemini.toml` (`gemini-3.5-flash-lite` agent, `gemini-4-hydrogen` judge/eval_writer, `gemini-embedding-001`) selectable via `--profile gemini` across all CLI commands or `FORGE_PROFILE=gemini`, keeping `forge.toml` (Ollama) as default
+  - Added `FORGE_GEMINI_API_KEY=` placeholder in `.env.example`; key read strictly from env / gitignored `.env`, never serialized into TOML, logs, caches, or run artifacts
+  - Implemented `GeminiProvider`, exponential backoff with jitter on `429`/`5xx`, RPM throttle, concurrency cap, per-run `max_calls_per_run` budget, actionable key/quota error mapping, BM25 fallback on empty embed model, per-role provider routing (`endpoints.role_providers` / `FORGE_<ROLE>_PROVIDER`), hosted-provider privacy notice, and profile/provider reporting in `pipeline_state.json`, `AgentDefinition`, and `report.md`
+  - Registered `live` pytest marker in `pyproject.toml` and added mocked/security/`@pytest.mark.live` tests in `tests/test_gemini_provider.py` + updated `README.md` ("Using Gemini")
+- **Verification**:
+  - `pytest -q` and `ruff check .` passed cleanly.

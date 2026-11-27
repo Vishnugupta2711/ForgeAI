@@ -40,8 +40,10 @@ def default_output_contract_schema() -> dict[str, Any]:
 
 
 class AgentProvenance(BaseModel):
-    """Provenance metadata recording models and prompt template hashes."""
+    """Provenance metadata recording models, providers, profile, and prompt template hashes."""
 
+    profile: str = "default"
+    providers: dict[str, str] = Field(default_factory=dict)
     model_names: dict[str, str] = Field(default_factory=dict)
     prompt_hashes: dict[str, str] = Field(default_factory=dict)
     created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
@@ -149,9 +151,10 @@ class OutputContractConfig(BaseModel):
 class AgentModelSettings(BaseModel):
     """Runtime model configuration for the generated agent."""
 
-    provider: Literal["ollama", "openai_compat"] = "ollama"
+    provider: Literal["ollama", "openai_compat", "gemini"] = "ollama"
     name: str = "qwen2.5:3b-instruct"
     embed_model: str = "nomic-embed-text"
+    embed_provider: Literal["ollama", "openai_compat", "gemini"] | None = None
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     seed: int | None = 42
     max_tool_calls: int = Field(default=3, ge=0, le=10)

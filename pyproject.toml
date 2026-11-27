@@ -29,7 +29,10 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+addopts = "-q -m 'not live'"
+markers = [
+    "live: live API smoke tests requiring running Ollama or FORGE_GEMINI_API_KEY (skipped by default / CI)",
+]
 
 [tool.ruff]
 target-version = "py311"

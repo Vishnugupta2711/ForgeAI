@@ -46,6 +46,32 @@ ollama pull nomic-embed-text
 
 To use an OpenAI-compatible endpoint instead, copy `.env.example` to `.env`, set `FORGE_PROVIDER=openai_compat`, `FORGE_OPENAI_COMPAT_BASE_URL`, and `FORGE_OPENAI_API_KEY`.
 
+### Using Gemini
+
+ForgeAI supports Google's Gemini API via its OpenAI-compatible endpoint (`https://generativelanguage.googleapis.com/v1beta/openai/`) using the switchable `gemini` profile ([forge.gemini.toml](forge.gemini.toml); model specs and rate limits documented in [docs/GEMINI.md](docs/GEMINI.md)). Ollama stays the default when `--profile` is omitted.
+
+1. Copy `.env.example` to `.env` and add your API key (read strictly from `FORGE_GEMINI_API_KEY`, never committed or logged):
+
+```bash
+cp .env.example .env
+# Set FORGE_GEMINI_API_KEY=<your-gemini-api-key>
+```
+
+2. Run any command with `--profile gemini` (or `export FORGE_PROFILE=gemini`):
+
+```bash
+forge run --profile gemini \
+  --brief fixtures/rehearsal/unsupported_scope/brief.txt \
+  --docs fixtures/rehearsal/unsupported_scope/docs \
+  --out /tmp/gemini_scratch --auto --fast
+```
+
+3. Run the live provider smoke tests when your key and/or Ollama are active:
+
+```bash
+pytest -m live -q
+```
+
 ## Quickstart
 
 Run the entire factory unattended (`--auto`), with optional `--fast` or `--time-budget-min`:

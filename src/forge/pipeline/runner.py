@@ -69,6 +69,9 @@ class PipelineState(BaseModel):
     brief: str
     docs_dir: str
     out_dir: str
+    profile: str = "default"
+    providers: dict[str, str] = Field(default_factory=dict)
+    models: dict[str, str] = Field(default_factory=dict)
     fast_mode: bool = False
     strict: bool = False
     max_iters: int = 3
@@ -171,6 +174,14 @@ class ForgePipeline:
                 brief=brief,
                 docs_dir=str(docs_path),
                 out_dir=str(out_path),
+                profile=self.config.profile,
+                providers=self.config.providers_by_role(),
+                models={
+                    "agent": self.config.models.agent,
+                    "judge": self.config.models.judge,
+                    "eval_writer": self.config.models.eval_writer,
+                    "embed": self.config.models.embed,
+                },
                 fast_mode=fast,
                 strict=strict,
                 max_iters=resolved_max_iters,
@@ -484,10 +495,11 @@ def run_factory(
     resume: bool = False,
     time_budget_min: float | None = None,
     bm25_only: bool = False,
+    profile: str | None = None,
     llm_client: LLMClient | None = None,
 ) -> PipelineState:
     """Convenience entrypoint running ForgePipeline from configuration."""
-    cfg = load_config()
+    cfg = load_config(profile=profile)
     out_path = Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
     client = llm_client or LLMClient.from_config(cfg, usage_log_path=out_path / "usage.jsonl")
