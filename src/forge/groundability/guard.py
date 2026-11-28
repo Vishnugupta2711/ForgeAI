@@ -22,6 +22,7 @@ from forge.retrieval.hybrid import HybridIndex, HybridRetriever, tokenize
 from forge.retrieval.models import RetrievalConfig, SearchHit
 
 if TYPE_CHECKING:
+    from forge.ingest.models import Chunk
     from forge.intake.models import RefusalTopic, RequirementsDocument
 
 _STOPWORDS = frozenset(
@@ -139,12 +140,49 @@ def _normalize_ws(text: str) -> str:
     return re.sub(r"\s+", " ", _unwrap_pdf_hyphens(text)).strip()
 
 
+def _merge_overlapping_chunks(texts: list[str]) -> str:
+    """Concatenate ordered chunks from one document while deduplicating overlaps."""
+    if not texts:
+        return ""
+    merged = _normalize_ws(texts[0])
+    for nxt_raw in texts[1:]:
+        nxt = _normalize_ws(nxt_raw)
+        if not nxt:
+            continue
+        if nxt in merged:
+            continue
+        max_k = min(len(merged), len(nxt), 400)
+        overlap_len = 0
+        for k in range(max_k, 7, -1):
+            if merged.endswith(nxt[:k]):
+                overlap_len = k
+                break
+        if overlap_len > 0:
+            merged = f"{merged}{nxt[overlap_len:]}".strip()
+        else:
+            merged = f"{merged} {nxt}".strip()
+    return merged
+
+
+def _build_doc_texts(chunks: list[Chunk]) -> dict[str, str]:
+    """Build merged normalized document texts ordered by chunk index per doc_id."""
+    by_doc: dict[str, list[Chunk]] = {}
+    for ch in chunks:
+        by_doc.setdefault(ch.doc_id, []).append(ch)
+    return {
+        doc_id: _merge_overlapping_chunks([c.text for c in doc_chunks])
+        for doc_id, doc_chunks in by_doc.items()
+    }
+
+
 def _verify_quote_against_hits(
     quote_text: str,
     cited_chunk_id: str,
     hits: list[SearchHit],
+    *,
+    doc_texts: dict[str, str] | None = None,
 ) -> tuple[bool, str, str]:
-    """Verify quote is an actual substring of a retrieved chunk.
+    """Verify quote is an actual substring of a retrieved chunk or merged document text.
 
     Returns (verified, resolved_doc_id, resolved_chunk_id).
     """
@@ -166,6 +204,27 @@ def _verify_quote_against_hits(
     for chunk in candidates:
         if cleaned in chunk.text or norm_quote in _normalize_ws(chunk.text):
             return True, chunk.doc_id, chunk.chunk_id
+
+    # K2 fallback: check full cited document text (or adjacent merged chunks in hit doc_ids)
+    if doc_texts:
+        ordered_docs: list[str] = []
+        if cited_chunk_id in hit_map:
+            ordered_docs.append(hit_map[cited_chunk_id].doc_id)
+        for chunk in candidates:
+            if chunk.doc_id not in ordered_docs:
+                ordered_docs.append(chunk.doc_id)
+        for doc_id in ordered_docs:
+            full_norm = doc_texts.get(doc_id, "")
+            if full_norm and norm_quote in full_norm:
+                fallback_cid = (
+                    cited_chunk_id
+                    if cited_chunk_id in hit_map and hit_map[cited_chunk_id].doc_id == doc_id
+                    else next(
+                        (c.chunk_id for c in candidates if c.doc_id == doc_id),
+                        cited_chunk_id,
+                    )
+                )
+                return True, doc_id, fallback_cid
 
     return False, "", cited_chunk_id
 
@@ -325,10 +384,14 @@ class GroundabilityGuard:
                 gap_note=f"Could not verify evidence for '{topic.title}'.",
             )
 
+        doc_texts = _build_doc_texts(list(self.index.chunks))
         verified_quotes: list[EvidenceQuote] = []
         for q_item in verdict.quotes:
             ok, doc_id, resolved_chunk_id = _verify_quote_against_hits(
-                q_item.quote, q_item.chunk_id, hits
+                q_item.quote,
+                q_item.chunk_id,
+                hits,
+                doc_texts=doc_texts,
             )
             verified_quotes.append(
                 EvidenceQuote(

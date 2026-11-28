@@ -210,19 +210,45 @@ def test_judge_rejects_fabricated_quote_and_handles_position_bias_uncertainty() 
         ],
     )
 
-    # 1. Judge LLM fabricates a supporting quote -> claim rejected -> grounded=False
+    # 1a. Deterministic SUPPORTED claim cannot be overridden even if LLM fabricates/fails
     fab_llm = FakeLLM(responses=[_judge_fake_responder([acoustic.text], fabricate_quote=True)] * 5)
-    verdict_fab = Judge(fab_llm).evaluate_case(case, record, chunk_map)
+    verdict_det = Judge(fab_llm).evaluate_case(case, record, chunk_map)
+    assert verdict_det.grounded is True
+    assert verdict_det.passed is True
+    assert verdict_det.passed_via_fallback is False
+
+    # 1b. Middle-band claim with fabricated supporting quote -> rejected -> grounded=False
+    mid_record = record.model_copy(
+        update={
+            "output": AgentOutput(
+                answer=(
+                    "Hydrophone pods operate 45 meters below mean sea level "
+                    "inside gentle ocean weather."
+                ),
+                citations=[
+                    Citation(
+                        doc_id=acoustic.doc_id,
+                        chunk_id=acoustic.chunk_id,
+                        quote="Deploy hydrophone pods at 45 meters below mean sea level",
+                    )
+                ],
+                refused=False,
+                confidence=0.9,
+            )
+        }
+    )
+    verdict_fab = Judge(fab_llm).evaluate_case(case, mid_record, chunk_map)
     assert verdict_fab.grounded is False
     assert verdict_fab.passed is False
 
-    # 2. Position bias disagreement on 2 claims -> uncertain=True and deterministic fallback!
+    # 2. Position bias disagreement on 2 middle-band claims -> uncertain & fallback
     two_claim_record = record.model_copy(
         update={
             "output": AgentOutput(
                 answer=(
-                    "Deploy hydrophone pods at 45 meters below mean sea level. "
-                    "Avoid anchoring within 200 meters of active lanes."
+                    "Hydrophone pods operate 45 meters below mean sea level "
+                    "inside gentle ocean weather. "
+                    "Vessels skip anchoring near 200 meters from busy sea transit."
                 ),
                 citations=[
                     Citation(
@@ -238,7 +264,6 @@ def test_judge_rejects_fabricated_quote_and_handles_position_bias_uncertainty() 
     )
     disagree_llm = FakeLLM(
         responses=[
-            json.dumps({"claims": ["Claim A", "Claim B"]}),
             json.dumps(
                 {
                     "verdicts": [
@@ -273,6 +298,9 @@ def test_judge_rejects_fabricated_quote_and_handles_position_bias_uncertainty() 
     verdict_uncertain = Judge(disagree_llm).evaluate_case(case, two_claim_record, chunk_map)
     assert verdict_uncertain.uncertain is True
     assert verdict_uncertain.position_bias_disagreement is True
+    assert verdict_uncertain.used_fallback is True
+    assert verdict_uncertain.passed_via_fallback is True
+    assert verdict_uncertain.uncertain_claims >= 1
     # Deterministic fallback passes because citation is valid and no ungrounded numbers exist
     assert verdict_uncertain.grounded is True
     assert verdict_uncertain.passed is True

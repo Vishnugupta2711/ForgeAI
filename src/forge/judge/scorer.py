@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import random
+import re
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -14,6 +15,9 @@ from forge.evals.generator import model_family
 from forge.evals.models import EvalCase
 from forge.ingest.models import Chunk
 from forge.judge.deterministic import (
+    _NUMBER_RE,
+    _canon_number,
+    canonicalize_text,
     check_citation_validity,
     check_refusal,
     compute_key_fact_recall,
@@ -32,15 +36,98 @@ from forge.judge.models import (
 from forge.llm.client import LLMClient
 from forge.llm.models import LLMProviderError
 
+_STOPWORDS = frozenset(
+    {
+        "a", "an", "and", "are", "as", "at", "be", "by", "can", "do", "for", "from",
+        "has", "have", "in", "into", "is", "it", "its", "of", "on", "or", "per",
+        "should", "that", "the", "their", "this", "to", "was", "were", "when",
+        "where", "which", "who", "will", "with",
+    }
+)
 
-class _ExtractedClaims(BaseModel):
-    claims: list[str] = Field(default_factory=list)
+_BOILERPLATE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"^(?:thank you|thanks)(?:\s+for\s+(?:asking|your question))?[.!]*$", re.I),
+    re.compile(r"^(?:i\s+)?hope\s+this\s+helps[.!]*$", re.I),
+    re.compile(
+        r"^please\s+(?:consult|refer\s+to)\s+the\s+cited\s+passage(?:\s+for\s+reference)?[.!]*$",
+        re.I,
+    ),
+    re.compile(r"^please\s+let\s+me\s+know\s+if\s+you\s+(?:have|need)\s+.*$", re.I),
+)
+
+_FRAMING_PREFIX_RE = re.compile(
+    r"^(?:after\s+carefully\s+reviewing[^:]*,\s*here\s+is\s+the\s+(?:verified\s+)?summary\s*:\s*"
+    r"|here\s+is\s+the\s+(?:verified\s+)?summary\s*:\s*"
+    r"|based\s+on\s+(?:the\s+)?(?:documentation|provided\s+documents)\s*:\s*)",
+    re.I,
+)
+
+_PROMPT_LEAK_MARKERS = (
+    "return only a json object",
+    "claims to verify",
+    "critical rules",
+    "claim_index",
+    "exact verbatim substring from evidence",
+)
+
+
+def _split_claims_deterministic(answer_text: str) -> list[str]:
+    """Split answer into factual sentences deterministically, dropping fixed boilerplate."""
+    text = answer_text.strip()
+    if not text:
+        return []
+    raw_lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    raw_sentences: list[str] = []
+    for ln in raw_lines:
+        # Strip leading framing wrapper while preserving actual factual sentence
+        cleaned_ln = _FRAMING_PREFIX_RE.sub("", ln).strip()
+        if not cleaned_ln:
+            continue
+        parts = re.split(r"(?<=[.!?])\s+", cleaned_ln)
+        for part in parts:
+            s = _FRAMING_PREFIX_RE.sub("", part.strip()).strip()
+            if s:
+                raw_sentences.append(s)
+
+    claims: list[str] = []
+    for sent in raw_sentences:
+        if any(pat.match(sent) for pat in _BOILERPLATE_PATTERNS):
+            continue
+        claims.append(sent)
+    return claims or [text]
+
+
+def _claim_tokens(text: str) -> list[str]:
+    canon = canonicalize_text(text)
+    return [t for t in re.findall(r"[a-z0-9]+", canon) if len(t) > 1 and t not in _STOPWORDS]
+
+
+def _is_prompt_leak(text: str) -> bool:
+    low = text.strip().lower()
+    return any(marker in low for marker in _PROMPT_LEAK_MARKERS)
+
+
+def _reason_checks_out(reason: str, claim: str, evidence_texts: list[str]) -> bool:
+    cleaned = reason.strip()
+    if len(cleaned) < 12 or _is_prompt_leak(cleaned):
+        return False
+    r_tokens = set(_claim_tokens(cleaned))
+    if not r_tokens:
+        return False
+    c_tokens = set(_claim_tokens(claim))
+    if r_tokens & c_tokens:
+        return True
+    ev_tokens: set[str] = set()
+    for ev in evidence_texts:
+        ev_tokens.update(_claim_tokens(ev))
+    return bool(r_tokens & ev_tokens)
 
 
 class _ClaimVerdictItem(BaseModel):
     claim_index: int
     supported: bool
     quote: str = ""
+    reason: str = ""
 
 
 class _ClaimVerdictList(BaseModel):
@@ -74,7 +161,7 @@ class Judge:
         ordered_claims: list[str],
         evidence_block: str,
         evidence_texts: list[str],
-    ) -> dict[str, ClaimVerification]:
+    ) -> dict[str, tuple[ClaimVerification, _ClaimVerdictItem | None]]:
         if not ordered_claims:
             return {}
         claims_block = "\n".join(
@@ -94,29 +181,84 @@ class Judge:
             max_repairs=2,
         )
         by_index = {v.claim_index: v for v in parsed.verdicts}
-        result: dict[str, ClaimVerification] = {}
+        result: dict[str, tuple[ClaimVerification, _ClaimVerdictItem | None]] = {}
         for idx, claim_text in enumerate(ordered_claims, start=1):
             item = by_index.get(idx)
             if item is None:
-                result[claim_text] = ClaimVerification(
-                    claim=claim_text,
-                    supported=False,
-                    quote="",
-                    verified_substring=False,
+                result[claim_text] = (
+                    ClaimVerification(
+                        claim=claim_text,
+                        supported=False,
+                        quote="",
+                        verified_substring=False,
+                        status="uncertain",
+                        method="fallback",
+                        reason="Missing verifier item.",
+                    ),
+                    None,
                 )
                 continue
+            leaked = _is_prompt_leak(item.quote) or _is_prompt_leak(item.reason)
             quote_ok = (
-                verify_quote_in_evidence(item.quote, evidence_texts)
+                (not leaked) and verify_quote_in_evidence(item.quote, evidence_texts)
                 if item.supported
                 else False
             )
-            result[claim_text] = ClaimVerification(
-                claim=claim_text,
-                supported=bool(item.supported and quote_ok),
-                quote=item.quote,
-                verified_substring=quote_ok,
+            result[claim_text] = (
+                ClaimVerification(
+                    claim=claim_text,
+                    supported=bool(item.supported and quote_ok),
+                    quote=item.quote,
+                    verified_substring=quote_ok,
+                    status="supported" if (item.supported and quote_ok) else "unsupported",
+                    method="llm",
+                    reason=item.reason,
+                ),
+                item,
             )
         return result
+
+    def _classify_claim_deterministic(
+        self,
+        claim: str,
+        evidence_items: list[str],
+    ) -> tuple[str, float, str]:
+        """Classify claim into SUPPORTED, UNSUPPORTED, or MIDDLE using single-item overlap."""
+        canon_claim = canonicalize_text(claim)
+        c_tokens = _claim_tokens(claim)
+        c_nums = {_canon_number(n) for n in _NUMBER_RE.findall(canon_claim)}
+
+        best_overlap_any = 0.0
+        best_overlap_with_nums = 0.0
+        any_ev_has_nums = not c_nums
+        best_quote = ""
+
+        for ev in evidence_items:
+            canon_ev = canonicalize_text(ev)
+            ev_tokens = set(_claim_tokens(ev))
+            ev_nums = {_canon_number(n) for n in _NUMBER_RE.findall(canon_ev)}
+            nums_ok = c_nums.issubset(ev_nums)
+            if nums_ok:
+                any_ev_has_nums = True
+
+            if canon_claim and canon_claim in canon_ev:
+                overlap = 1.0
+            elif c_tokens:
+                overlap = sum(1 for t in c_tokens if t in ev_tokens) / len(c_tokens)
+            else:
+                overlap = 1.0 if (canon_claim and canon_claim in canon_ev) else 0.0
+
+            if overlap > best_overlap_any:
+                best_overlap_any = overlap
+            if nums_ok and overlap >= best_overlap_with_nums:
+                best_overlap_with_nums = overlap
+                best_quote = ev.splitlines()[0][:120] if ev.strip() else ""
+
+        if best_overlap_with_nums >= 0.72 and any_ev_has_nums:
+            return "SUPPORTED", best_overlap_with_nums, best_quote
+        if best_overlap_any < 0.35 or not any_ev_has_nums:
+            return "UNSUPPORTED", best_overlap_any, ""
+        return "MIDDLE", best_overlap_with_nums, best_quote
 
     def _judge_claim_groundedness(
         self,
@@ -125,71 +267,184 @@ class Judge:
         evidence_texts: list[str],
         *,
         deterministic_ok: bool,
-    ) -> tuple[bool, list[ClaimVerification], bool, list[str]]:
-        """Extract claims and run 2-pass order-shuffled verification for position bias."""
+        citation_quotes: list[str] | None = None,
+    ) -> tuple[bool, list[ClaimVerification], bool, int, bool, list[str]]:
+        """Verify claims deterministically first; send only middle band to 2-pass LLM verifier."""
         notes: list[str] = []
-        extract_prompt = load_prompt("judge_extract_claims.v1.md").format(answer=answer_text)
-        try:
-            extracted = self.llm_client.json(
-                extract_prompt,
-                schema=_ExtractedClaims,
-                model=self._judge_model(),
-                temperature=0.0,
-                seed=self.seed,
-                role="judge",
-                max_repairs=2,
-            )
-            claims = [c.strip() for c in extracted.claims if c.strip()]
-        except LLMProviderError:
-            raise
-        except Exception as exc:
-            notes.append(f"Claim extraction failed ({exc}); using deterministic groundedness.")
-            return deterministic_ok, [], True, notes
-
+        claims = _split_claims_deterministic(answer_text)
         if not claims:
-            return deterministic_ok, [], False, notes
+            return deterministic_ok, [], False, 0, False, notes
 
-        # Pass 1: forward order
-        try:
-            pass1 = self._verify_claims_pass(claims, evidence_block, evidence_texts)
-        except LLMProviderError:
-            raise
-        except Exception as exc:
-            notes.append(f"Claim verification pass 1 failed ({exc}); deterministic fallback.")
-            return deterministic_ok, [], True, notes
+        det_pool = list(evidence_texts) + [q for q in (citation_quotes or []) if q.strip()]
+        middle_claims: list[str] = []
+        claim_states: dict[str, ClaimVerification] = {}
 
-        # Pass 2: reversed / shuffled order to detect position bias
-        if len(claims) >= 2:
-            shuffled = list(reversed(claims))
-            if len(claims) > 2:
-                rng = random.Random(self.seed)
-                rng.shuffle(shuffled)
-                if shuffled == claims:
-                    shuffled = list(reversed(claims))
+        for claim in claims:
+            band, overlap, matched_snip = self._classify_claim_deterministic(claim, det_pool)
+            if band == "SUPPORTED":
+                claim_states[claim] = ClaimVerification(
+                    claim=claim,
+                    supported=True,
+                    quote=matched_snip,
+                    verified_substring=bool(matched_snip),
+                    status="supported",
+                    method="deterministic",
+                    reason=f"Deterministic support (overlap={overlap:.2f}).",
+                )
+            elif band == "UNSUPPORTED":
+                claim_states[claim] = ClaimVerification(
+                    claim=claim,
+                    supported=False,
+                    quote="",
+                    verified_substring=False,
+                    status="unsupported",
+                    method="deterministic",
+                    reason=f"Deterministic ungrounded claim (overlap={overlap:.2f}).",
+                )
+            else:
+                middle_claims.append(claim)
+
+        uncertain_claims = 0
+        used_fallback = False
+        pos_disagreement = False
+
+        if middle_claims:
             try:
-                pass2 = self._verify_claims_pass(shuffled, evidence_block, evidence_texts)
+                pass1 = self._verify_claims_pass(middle_claims, evidence_block, evidence_texts)
             except LLMProviderError:
                 raise
             except Exception as exc:
-                notes.append(f"Claim verification pass 2 failed ({exc}); deterministic fallback.")
-                return deterministic_ok, list(pass1.values()), True, notes
+                notes.append(f"Claim verification pass 1 failed ({exc}); deterministic fallback.")
+                for mc in middle_claims:
+                    uncertain_claims += 1
+                    used_fallback = True
+                    claim_states[mc] = ClaimVerification(
+                        claim=mc,
+                        supported=deterministic_ok,
+                        quote="",
+                        verified_substring=False,
+                        status="uncertain",
+                        method="fallback",
+                        reason=str(exc),
+                    )
+                pass1 = {}
 
-            disagreed = any(
-                pass1[c].supported != pass2[c].supported for c in claims if c in pass2
-            )
-            if disagreed:
-                notes.append(
-                    "Position bias disagreement between forward and shuffled claim verification; "
-                    "falling back to deterministic groundedness."
+            pass2: dict[str, tuple[ClaimVerification, _ClaimVerdictItem | None]] = {}
+            if pass1 and len(middle_claims) >= 2:
+                shuffled = list(reversed(middle_claims))
+                if len(middle_claims) > 2:
+                    rng = random.Random(self.seed)
+                    rng.shuffle(shuffled)
+                    if shuffled == middle_claims:
+                        shuffled = list(reversed(middle_claims))
+                try:
+                    pass2 = self._verify_claims_pass(shuffled, evidence_block, evidence_texts)
+                except LLMProviderError:
+                    raise
+                except Exception as exc:
+                    notes.append(
+                        f"Claim verification pass 2 failed ({exc}); deterministic fallback."
+                    )
+                    used_fallback = True
+                    pass2 = {}
+
+            for mc in middle_claims:
+                if mc in claim_states:
+                    continue
+                v1, item1 = pass1[mc]
+                v2_pair = pass2.get(mc)
+                if v2_pair is not None and v1.supported != v2_pair[0].supported:
+                    pos_disagreement = True
+                    uncertain_claims += 1
+                    used_fallback = True
+                    claim_states[mc] = ClaimVerification(
+                        claim=mc,
+                        supported=deterministic_ok,
+                        quote=v1.quote,
+                        verified_substring=v1.verified_substring,
+                        status="uncertain",
+                        method="fallback",
+                        reason="Position bias disagreement between forward and shuffled passes.",
+                    )
+                    continue
+
+                if item1 is not None and item1.supported:
+                    # LLM supported=True requires valid non-leaked verbatim quote
+                    if v1.verified_substring:
+                        claim_states[mc] = v1
+                    else:
+                        claim_states[mc] = ClaimVerification(
+                            claim=mc,
+                            supported=False,
+                            quote=item1.quote,
+                            verified_substring=False,
+                            status="unsupported",
+                            method="llm",
+                            reason="LLM returned fabricated or unverified supporting quote.",
+                        )
+                        notes.append("Rejected unsupported or fabricated-quote claim(s).")
+                    continue
+
+                # LLM supported=False (or missing item): count only if quote/reason checks out
+                q_str = item1.quote.strip() if item1 else ""
+                r_str = item1.reason.strip() if item1 else ""
+                leaked = (item1 is not None) and (
+                    _is_prompt_leak(q_str) or _is_prompt_leak(r_str)
                 )
-                return deterministic_ok, list(pass1.values()), True, notes
+                quote_checks_out = bool(q_str) and (not leaked) and verify_quote_in_evidence(
+                    q_str, evidence_texts
+                )
+                reason_checks_out = (not leaked) and _reason_checks_out(r_str, mc, evidence_texts)
 
-        verdicts = [pass1[c] for c in claims]
-        unverified_quotes = [v for v in verdicts if not v.supported and v.quote.strip()]
-        if unverified_quotes:
-            notes.append("Rejected unsupported or fabricated-quote claim(s).")
-        all_supported = all(v.supported for v in verdicts)
-        return all_supported, verdicts, False, notes
+                if quote_checks_out or reason_checks_out:
+                    claim_states[mc] = ClaimVerification(
+                        claim=mc,
+                        supported=False,
+                        quote=q_str,
+                        verified_substring=quote_checks_out,
+                        status="unsupported",
+                        method="llm",
+                        reason=r_str or "Verifier returned checked-out counter-evidence.",
+                    )
+                    notes.append("Rejected unsupported claim with checked-out verifier reason.")
+                else:
+                    uncertain_claims += 1
+                    used_fallback = True
+                    claim_states[mc] = ClaimVerification(
+                        claim=mc,
+                        supported=deterministic_ok,
+                        quote="" if leaked else q_str,
+                        verified_substring=False,
+                        status="uncertain",
+                        method="fallback",
+                        reason=(
+                            "LLM unsupported lacked verified quote/reason or leaked prompt; "
+                            "deterministic result stands."
+                        ),
+                    )
+
+        verdicts = [claim_states[c] for c in claims]
+        if pos_disagreement:
+            notes.append(
+                "Position bias disagreement between forward and shuffled claim verification; "
+                "falling back to deterministic groundedness."
+            )
+        elif uncertain_claims > 0:
+            notes.append(
+                f"{uncertain_claims} middle-band claim(s) uncertain; deterministic stood."
+            )
+
+        det_unsupported = [
+            v for v in verdicts if v.status == "unsupported" and v.method == "deterministic"
+        ]
+        if det_unsupported:
+            notes.append(
+                f"Deterministic guard rejected {len(det_unsupported)} ungrounded claim(s)."
+            )
+
+        any_unsupported = any(v.status == "unsupported" for v in verdicts)
+        grounded = False if any_unsupported else deterministic_ok
+        return grounded, verdicts, pos_disagreement, uncertain_claims, used_fallback, notes
 
     def _judge_ambiguous_correctness(
         self,
@@ -295,9 +550,11 @@ class Judge:
         if case.expected_behavior == "answer" and missed_facts:
             reasons.append(f"Missed key facts: {missed_facts}")
 
-        # 5. Groundedness verdict (deterministic first, LLM claim-level second)
+        # 5. Groundedness verdict (deterministic first, LLM middle-band claim-level second)
         deterministic_grounded = citations_valid and (len(ungrounded_nums) == 0)
         claim_results: list[ClaimVerification] = []
+        uncertain_claims = 0
+        used_fallback = False
         if out.refused:
             grounded = citations_valid
         elif not deterministic_grounded:
@@ -310,18 +567,26 @@ class Judge:
                 for tc in record.tool_calls
                 if tc.ok
             ]
-            grounded, claim_results, claim_uncertain, claim_notes = (
-                self._judge_claim_groundedness(
-                    out.answer,
-                    "\n\n".join(ev_parts) or "(no retrieved evidence)",
-                    retrieved_texts + tool_texts,
-                    deterministic_ok=deterministic_grounded,
-                )
+            (
+                grounded,
+                claim_results,
+                claim_pos_bias,
+                uncertain_claims,
+                used_fallback,
+                claim_notes,
+            ) = self._judge_claim_groundedness(
+                out.answer,
+                "\n\n".join(ev_parts) or "(no retrieved evidence)",
+                retrieved_texts + tool_texts,
+                deterministic_ok=deterministic_grounded,
+                citation_quotes=[c.quote for c in out.citations],
             )
             reasons.extend(claim_notes)
-            if claim_uncertain:
+            if claim_pos_bias:
                 uncertain = True
                 pos_disagreement = True
+            elif uncertain_claims > 0:
+                uncertain = True
 
         # 6. Correctness verdict (deterministic first, LLM only when ambiguous)
         if case.expected_behavior == "refuse":
@@ -358,6 +623,7 @@ class Judge:
                 pos_disagreement = True
 
         passed = refusal_ok and grounded and correct
+        passed_via_fallback = passed and (used_fallback or pos_disagreement or uncertain)
         if passed and not reasons:
             reasons.append("All deterministic and claim-level checks passed.")
 
@@ -371,6 +637,9 @@ class Judge:
             passed=passed,
             reasons=reasons,
             uncertain=uncertain,
+            uncertain_claims=uncertain_claims,
+            used_fallback=used_fallback,
+            passed_via_fallback=passed_via_fallback,
             key_fact_recall=recall,
             citations_valid=citations_valid,
             ungrounded_numbers=ungrounded_nums,

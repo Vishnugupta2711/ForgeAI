@@ -12,12 +12,15 @@ from forge.evals.models import EvalCategory, ExpectedBehavior
 
 
 class ClaimVerification(BaseModel):
-    """Binary groundedness verification for a single extracted claim."""
+    """Groundedness verification for a single extracted claim."""
 
     claim: str
     supported: bool
     quote: str = ""
     verified_substring: bool = False
+    status: str = "supported"  # "supported" | "unsupported" | "uncertain"
+    method: str = "deterministic"  # "deterministic" | "llm" | "fallback"
+    reason: str = ""
 
 
 class CaseVerdict(BaseModel):
@@ -32,6 +35,9 @@ class CaseVerdict(BaseModel):
     passed: bool
     reasons: list[str] = Field(default_factory=list)
     uncertain: bool = False
+    uncertain_claims: int = 0
+    used_fallback: bool = False
+    passed_via_fallback: bool = False
     key_fact_recall: float = Field(default=0.0, ge=0.0, le=1.0)
     citations_valid: bool = True
     ungrounded_numbers: list[str] = Field(default_factory=list)
@@ -172,6 +178,8 @@ class CanaryMetric(BaseModel):
     expected_pass: bool
     total: int
     actual_pass: int
+    passed_cleanly: int = 0
+    passed_via_fallback: int = 0
     false_passes: int
     false_fails: int
     false_pass_rate: float
@@ -184,6 +192,7 @@ class CanaryCaseResult(BaseModel):
     canary_id: str
     canary_type: str
     expected_pass: bool
+    passed_via_fallback: bool = False
     verdict: CaseVerdict
 
 
@@ -195,6 +204,9 @@ class JudgeReliabilityReport(BaseModel):
     total_canaries: int
     overall_false_pass_rate: float
     overall_false_fail_rate: float
+    overall_clean_pass_rate: float = 0.0
+    passed_cleanly_count: int = 0
+    passed_via_fallback_count: int = 0
     per_canary_type: list[CanaryMetric] = Field(default_factory=list)
     cases: list[CanaryCaseResult] = Field(default_factory=list)
 
