@@ -225,15 +225,22 @@ def _generate_verified_diagnosis(
     allowed_numbers: set[str],
     summary_block: str,
     llm_client: LLMClient | None,
+    *,
+    judge_unreliable: bool = False,
 ) -> tuple[list[str], list[str]]:
     """Generate and lint LLM diagnosis prose; fall back deterministically if lint rejects."""
     if not failing_items:
+        if judge_unreliable:
+            return [
+                "No failing cases recorded; however, judge reliability checks failed so "
+                "pass rates are unreliable lower bounds and cannot verify agent quality."
+            ], []
         return ["No failing cases remained in the final evaluation."], []
 
     valid_ids = {item["case_id"] for item in failing_items}
     lint_warnings: list[str] = []
 
-    if llm_client is not None:
+    if llm_client is not None and not judge_unreliable:
         failures_block = "\n".join(
             f"- {item['case_id']} ({item['split']}/{item['category']}, "
             f"failure={item['failure_category']}): {item['reasons']}"
@@ -270,9 +277,13 @@ def _generate_verified_diagnosis(
             lint_warnings.append(f"LLM diagnosis generation failed: {exc}")
 
     # Deterministic code-templated fallback citing exact case IDs & verified result reasons
-    fallback_lines = [
-        "Deterministic failure diagnosis (all facts traced directly to result files):"
-    ]
+    prefix_note = (
+        "Judge reliability gate failed (scores are unreliable lower bounds; narrative score claims "
+        "blocked). Case-level failure records below:"
+        if judge_unreliable
+        else "Deterministic failure diagnosis (all facts traced directly to result files):"
+    )
+    fallback_lines = [prefix_note]
     for item in failing_items:
         fallback_lines.append(
             f"- **{item['case_id']}** (`{item['split']}` / `{item['category']}`, "
@@ -336,6 +347,27 @@ def build_report(
     )
 
     lines: list[str] = ["# ForgeAI Run Quality Report", ""]
+
+    # Top-of-report Judge Reliability Gate banner (J3)
+    judge_unreliable = judge_rel is not None and (
+        judge_rel.overall_false_fail_rate > 0.25 or judge_rel.overall_false_pass_rate > 0.0
+    )
+    if judge_unreliable and judge_rel is not None:
+        lines.extend(
+            [
+                "## ⚠️ Judge Reliability Warning (Scores Unreliable Lower Bounds)",
+                "",
+                (
+                    f"- **Unreliable Judge Gate Triggered**: Live canary self-test reported "
+                    f"`false_fail={judge_rel.overall_false_fail_rate * 100:.1f}%` "
+                    f"(limit `<= 25.0%`) and "
+                    f"`false_pass={judge_rel.overall_false_pass_rate * 100:.1f}%` "
+                    "(limit `0.0%`). Reported scores are **unreliable lower bounds** and must not "
+                    "be cited as measures of agent quality."
+                ),
+                "",
+            ]
+        )
 
     # Partial failure banner if pipeline crashed mid-run
     if state.get("failed_stage"):
@@ -522,6 +554,12 @@ def build_report(
 
     # 4. Per-Iteration Dev Scorecard & Final Held-Out Score with Wilson Intervals
     lines.append("## 4. Per-Iteration Dev Scorecard & Held-Out Results")
+    if judge_unreliable:
+        lines.append(
+            "> **Note**: Judge reliability gate triggered (`false_fail > 25%` or "
+            "`false_pass > 0%`); numbers below are uncalibrated lower bounds."
+        )
+        lines.append("")
     if opt_sc is not None:
         lines.extend(
             [
@@ -634,7 +672,11 @@ def build_report(
         f"final_held_out={final_held.overall_pass_rate if final_held else 0.0:.4f}"
     )
     diag_lines, lint_warnings = _generate_verified_diagnosis(
-        failing_items, allowed_numbers, summary_blk, llm_client
+        failing_items,
+        allowed_numbers,
+        summary_blk,
+        llm_client,
+        judge_unreliable=judge_unreliable,
     )
     lines.extend(diag_lines)
     if lint_warnings:
@@ -653,6 +695,10 @@ def build_report(
             [
                 f"- **Judge Model**: `{judge_rel.judge_model}`",
                 f"- **Canary Cases Evaluated**: `{judge_rel.total_canaries}`",
+                (
+                    f"- **Passed Cleanly / via Fallback**: "
+                    f"`{judge_rel.passed_cleanly_count}` / `{judge_rel.passed_via_fallback_count}`"
+                ),
                 f"- **Overall False-Pass Rate**: `{judge_rel.overall_false_pass_rate * 100:.1f}%`",
                 f"- **Overall False-Fail Rate**: `{judge_rel.overall_false_fail_rate * 100:.1f}%`",
             ]

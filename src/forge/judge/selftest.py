@@ -14,8 +14,10 @@ from forge.agent.schema import (
     RetrievedChunkRecord,
 )
 from forge.config import ForgeConfig
+from forge.evals.gates import verify_key_fact
 from forge.evals.models import EvalCase, EvalProvenance, EvalSet, EvalSourceRef
 from forge.ingest.models import Chunk
+from forge.judge.deterministic import _NUMBER_RE, canonicalize_text, compute_key_fact_recall
 from forge.judge.models import (
     CanaryCaseResult,
     CanaryMetric,
@@ -24,7 +26,140 @@ from forge.judge.models import (
 from forge.judge.scorer import Judge
 from forge.llm.client import LLMClient
 
-_DIGIT_RE = re.compile(r"\b(\d+(?:\.\d+)?)\b")
+_DIGIT_RE = _NUMBER_RE
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+
+
+def _mutate_numbers(text: str, key_facts: list[str] | None = None) -> str:
+    # Prefer mutating a standalone key-fact number so hyphenated IDs (SP-1026) stay untouched
+    fact_nums = (
+        {m for kf in key_facts for m in _NUMBER_RE.findall(kf)} if key_facts else set()
+    )
+    matches = list(_NUMBER_RE.finditer(text))
+    target = next((m for m in matches if m.group(1) in fact_nums), matches[0] if matches else None)
+    if target is not None:
+        raw_num = target.group(1).replace(",", "")
+        mutated = str(int(float(raw_num)) + 37)
+        return f"{text[:target.start()]}{mutated}{text[target.end():]}"
+    return f"{text} (total 9876 units)"
+
+
+def _is_csv_row_chunk(chunk: Chunk) -> bool:
+    if chunk.metadata.get("doc_type") == "csv" or "::row-" in chunk.chunk_id:
+        return True
+    lines = [ln.strip() for ln in chunk.text.splitlines() if ln.strip()]
+    return len(lines) >= 2 and all(":" in ln and "_" in ln.split(":", 1)[0] for ln in lines[:2])
+
+
+def _render_csv_natural_sentence(chunk: Chunk, key_facts: list[str]) -> str:
+    """Turn a CSV row chunk + key facts into a natural prose sentence."""
+    fields: dict[str, str] = {}
+    ordered_keys: list[str] = []
+    for ln in chunk.text.splitlines():
+        if ":" in ln:
+            k, v = ln.split(":", 1)
+            key_clean = k.strip()
+            fields[key_clean.lower()] = v.strip()
+            ordered_keys.append(key_clean)
+
+    subject_val = next(iter(fields.values()), chunk.doc_id)
+    for id_col in ("part_no", "sensor_id", "id", "name", "description"):
+        if id_col in fields and fields[id_col]:
+            subject_val = fields[id_col]
+            break
+
+    clauses: list[str] = []
+    for kf in key_facts:
+        if ":" in kf:
+            col_part, val_part = kf.split(":", 1)
+            col_words = col_part.strip().replace("_", " ")
+            clauses.append(f"the {col_words} is {val_part.strip()}")
+        else:
+            clauses.append(kf.strip().rstrip("."))
+
+    if clauses:
+        return f"For {subject_val}, " + ", and ".join(clauses) + "."
+    return f"For {subject_val}, recorded catalogue details apply."
+
+
+def _build_natural_gold_answer(base: EvalCase, gold_chunks: list[Chunk]) -> tuple[str, str]:
+    """Build natural sentences covering base.key_facts and return (answer, valid_quote)."""
+    sentences: list[str] = []
+    seen_lower: set[str] = set()
+    first_quote = ""
+
+    # Separate prose chunks from CSV row chunks
+    prose_chunks = [c for c in gold_chunks if not _is_csv_row_chunk(c)]
+    csv_chunks = [c for c in gold_chunks if _is_csv_row_chunk(c)]
+
+    remaining_facts: list[str] = []
+    for kf in base.key_facts:
+        matched_sent = ""
+        for ch in prose_chunks:
+            # Join wrapped PDF lines before sentence extraction
+            flat = re.sub(r"\s*\n\s*", " ", ch.text).strip()
+            for sent in _SENTENCE_SPLIT_RE.split(flat):
+                s_clean = sent.strip()
+                if s_clean and verify_key_fact(kf, s_clean, threshold=0.80):
+                    matched_sent = s_clean if s_clean.endswith((".", "!", "?")) else f"{s_clean}."
+                    if not first_quote:
+                        first_quote = s_clean[:120]
+                    break
+            if matched_sent:
+                break
+        if matched_sent:
+            low = matched_sent.lower()
+            if low not in seen_lower:
+                seen_lower.add(low)
+                sentences.append(matched_sent)
+        else:
+            remaining_facts.append(kf)
+
+    if remaining_facts and csv_chunks:
+        csv_facts = [
+            kf
+            for kf in remaining_facts
+            if any(verify_key_fact(kf, c.text, threshold=0.80) for c in csv_chunks)
+        ]
+        if csv_facts:
+            target_csv = next(
+                (c for c in csv_chunks if verify_key_fact(csv_facts[0], c.text, threshold=0.80)),
+                csv_chunks[0],
+            )
+            natural_csv = _render_csv_natural_sentence(target_csv, csv_facts)
+            sentences.append(natural_csv)
+            if not first_quote:
+                first_quote = target_csv.text.splitlines()[0][:120]
+            remaining_facts = [kf for kf in remaining_facts if kf not in csv_facts]
+
+    for kf in remaining_facts:
+        s = kf.strip()
+        if ":" in s and "_" in s.split(":", 1)[0]:
+            c_part, v_part = s.split(":", 1)
+            s = f"The {c_part.strip().replace('_', ' ')} is {v_part.strip()}."
+        elif not s.endswith((".", "!", "?")):
+            s = f"The documented policy confirms that {s}."
+        if s.lower() not in seen_lower:
+            seen_lower.add(s.lower())
+            sentences.append(s)
+
+    answer = " ".join(sentences).strip()
+    recall, _, missed = compute_key_fact_recall(base.key_facts, answer)
+    if recall < 1.0 and missed:
+        # Ensure all canonical key-fact tokens/numbers are represented cleanly in natural prose
+        answer = f"{answer} In addition, {'; '.join(missed)}.".strip()
+
+    if not first_quote and gold_chunks:
+        p0 = gold_chunks[0]
+        first_quote = next(
+            (
+                kf[:120]
+                for kf in base.key_facts
+                if canonicalize_text(kf) in canonicalize_text(p0.text)
+            ),
+            p0.text.splitlines()[0][:120],
+        )
+    return answer, first_quote
 
 
 class CanarySpec(BaseModel):
@@ -35,16 +170,6 @@ class CanarySpec(BaseModel):
     expected_pass: bool
     eval_case: EvalCase
     answer_record: AnswerRecord
-
-
-def _mutate_numbers(text: str) -> str:
-    if _DIGIT_RE.search(text):
-        return _DIGIT_RE.sub(
-            lambda m: str(int(float(m.group(1))) + 37),
-            text,
-            count=1,
-        )
-    return f"{text} (total 9876 units)"
 
 
 def _fallback_eval_set_from_chunks(chunks: list[Chunk]) -> EvalSet:
@@ -149,11 +274,7 @@ def build_canary_suite(
             )
             for ch in gold_chunks
         ]
-        gold_quote = next(
-            (kf for kf in base.key_facts if kf.lower() in primary.text.lower()),
-            primary.text.splitlines()[0][:80],
-        )
-        gold_answer_text = " ".join(base.key_facts)
+        gold_answer_text, gold_quote = _build_natural_gold_answer(base, gold_chunks)
         valid_citation = Citation(
             doc_id=primary.doc_id,
             chunk_id=primary.chunk_id,
@@ -198,7 +319,7 @@ def build_canary_suite(
                 eval_case=base,
                 answer_record=_rec(
                     AgentOutput(
-                        answer=_mutate_numbers(gold_answer_text),
+                        answer=_mutate_numbers(gold_answer_text, base.key_facts),
                         citations=[valid_citation],
                         refused=False,
                         confidence=0.9,
@@ -218,7 +339,8 @@ def build_canary_suite(
                     AgentOutput(
                         answer=(
                             f"{gold_answer_text} Additionally, an undocumented emergency override "
-                            "code 7741 applies in all cases."
+                            "protocol requires secondary regional audit sign-off "
+                            "under bulletin 7741."
                         ),
                         citations=[valid_citation],
                         refused=False,
@@ -378,6 +500,7 @@ def run_judge_selftest(
             canary_id=spec.canary_id,
             canary_type=spec.canary_type,
             expected_pass=spec.expected_pass,
+            passed_via_fallback=verdict.passed_via_fallback,
             verdict=verdict,
         )
         case_results.append(item)
@@ -388,17 +511,23 @@ def run_judge_selftest(
     total_false_fails = 0
     total_negatives = 0
     total_positives = 0
+    total_clean_passes = 0
+    total_fallback_passes = 0
 
     for c_type in sorted(grouped):
         items = grouped[c_type]
         exp_pass = items[0].expected_pass
         n = len(items)
         act_pass = sum(1 for i in items if i.verdict.passed)
+        p_fallback = sum(1 for i in items if i.verdict.passed and i.verdict.passed_via_fallback)
+        p_clean = act_pass - p_fallback
         fp = sum(1 for i in items if (not i.expected_pass) and i.verdict.passed)
         ff = sum(1 for i in items if i.expected_pass and (not i.verdict.passed))
         if exp_pass:
             total_positives += n
             total_false_fails += ff
+            total_clean_passes += p_clean
+            total_fallback_passes += p_fallback
         else:
             total_negatives += n
             total_false_passes += fp
@@ -409,6 +538,8 @@ def run_judge_selftest(
                 expected_pass=exp_pass,
                 total=n,
                 actual_pass=act_pass,
+                passed_cleanly=p_clean,
+                passed_via_fallback=p_fallback,
                 false_passes=fp,
                 false_fails=ff,
                 false_pass_rate=round(fp / n, 4) if (not exp_pass and n) else 0.0,
@@ -425,6 +556,11 @@ def run_judge_selftest(
         overall_false_fail_rate=(
             round(total_false_fails / total_positives, 4) if total_positives else 0.0
         ),
+        overall_clean_pass_rate=(
+            round(total_clean_passes / total_positives, 4) if total_positives else 0.0
+        ),
+        passed_cleanly_count=total_clean_passes,
+        passed_via_fallback_count=total_fallback_passes,
         per_canary_type=per_type,
         cases=case_results,
     )

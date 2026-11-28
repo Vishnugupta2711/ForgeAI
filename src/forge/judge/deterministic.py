@@ -123,22 +123,73 @@ def check_refusal(expected_behavior: ExpectedBehavior, refused: bool) -> tuple[b
     return True, "Refusal check passed."
 
 
+_QUOTE_SEG_SPLIT_RE = re.compile(
+    r"(?:\.\.\.+|…|\r?\n+|\||,\s*(?=[a-zA-Z0-9_]+\s*:))+"
+)
+
+
+def _normalize_quote_str(text: str) -> str:
+    """Unwrap PDF hyphens, normalize pipe delimiters and whitespace, lowercase."""
+    unwrapped = _unwrap_pdf_hyphens(text)
+    unwrapped = re.sub(r"\s*\|\s*", " ", unwrapped)
+    unwrapped = re.sub(r"\s*:\s*", ": ", unwrapped)
+    return _WHITESPACE_RE.sub(" ", unwrapped).strip().lower()
+
+
+def _segment_in_evidence(segment: str, norm_ev: str) -> bool:
+    """Match normalized segment against norm_ev with numeric boundary safety."""
+    if not segment or segment not in norm_ev:
+        return False
+    starts_digit = segment[0].isdigit()
+    ends_digit = segment[-1].isdigit()
+    if not starts_digit and not ends_digit:
+        return True
+    start = 0
+    while True:
+        idx = norm_ev.find(segment, start)
+        if idx == -1:
+            return False
+        left_ok = (
+            (not starts_digit)
+            or idx == 0
+            or not (norm_ev[idx - 1].isdigit() or norm_ev[idx - 1] == ".")
+        )
+        end_idx = idx + len(segment)
+        right_ok = (not ends_digit) or end_idx >= len(norm_ev) or not norm_ev[end_idx].isdigit()
+        if left_ok and right_ok:
+            return True
+        start = idx + 1
+
+
 def verify_quote_in_evidence(
     quote: str,
     evidence_texts: list[str],
     *,
     min_chars: int = 4,
 ) -> bool:
-    """Verify quote is a real exact or whitespace-normalized substring of evidence."""
+    """Verify quote (contiguous or segment-split) matches one evidence item."""
     cleaned = _unwrap_pdf_hyphens(quote).strip()
     if len(cleaned) < min_chars:
         return False
-    norm_quote = _WHITESPACE_RE.sub(" ", cleaned).lower()
+
+    norm_quote = _normalize_quote_str(cleaned)
+    raw_segments = [s.strip() for s in _QUOTE_SEG_SPLIT_RE.split(cleaned)]
+    segments = [
+        _normalize_quote_str(seg)
+        for seg in raw_segments
+        if seg and re.search(r"[a-zA-Z0-9]", seg)
+    ]
+    if not segments:
+        return False
+
+    # Require all non-trivial segments of a quote to exist within ONE evidence item
     for text in evidence_texts:
         if cleaned in text or quote.strip() in text:
             return True
-        norm_ev = _WHITESPACE_RE.sub(" ", _unwrap_pdf_hyphens(text)).lower()
-        if norm_quote in norm_ev:
+        norm_ev = _normalize_quote_str(text)
+        if norm_quote and _segment_in_evidence(norm_quote, norm_ev):
+            return True
+        if len(segments) > 1 and all(_segment_in_evidence(seg, norm_ev) for seg in segments):
             return True
     return False
 
@@ -147,7 +198,7 @@ def check_citation_validity(
     record: AnswerRecord,
     chunk_map: dict[str, Chunk],
 ) -> tuple[bool, list[str]]:
-    """Verify cited doc_id exists and each cited quote matches an actually retrieved chunk."""
+    """Verify cited doc_id/chunk_id and that quote segments match the cited chunk."""
     out = record.output
     if out.refused:
         return True, []
@@ -158,6 +209,7 @@ def check_citation_validity(
         for rc in record.retrieved_chunks
         if rc.chunk_id in chunk_map
     ]
+    retrieved_by_id = {c.chunk_id: c for c in retrieved_chunks}
     tool_texts: list[str] = [
         json.dumps(tc.result, ensure_ascii=False)
         for tc in record.tool_calls
@@ -179,12 +231,34 @@ def check_citation_validity(
         if cit.doc_id not in doc_ids:
             errors.append(f"Citation {idx}: unknown doc_id '{cit.doc_id}'.")
             continue
+
+        cited_cid = (cit.chunk_id or "").strip()
+        # Reject citations referencing a real chunk that the agent never retrieved
+        if cited_cid and cited_cid in chunk_map and cited_cid not in retrieved_by_id:
+            errors.append(f"Citation {idx}: chunk '{cited_cid}' was not retrieved.")
+            continue
+
+        if cited_cid and cited_cid in retrieved_by_id:
+            target_chunk = retrieved_by_id[cited_cid]
+            if target_chunk.doc_id != cit.doc_id:
+                errors.append(
+                    f"Citation {idx}: chunk '{cited_cid}' belongs to '{target_chunk.doc_id}', "
+                    f"not '{cit.doc_id}'."
+                )
+                continue
+            if not verify_quote_in_evidence(cit.quote, [target_chunk.text] + tool_texts):
+                errors.append(
+                    f"Citation {idx}: quote '{cit.quote[:60]}' "
+                    f"not found in cited chunk '{cited_cid}'."
+                )
+            continue
+
+        # Fallback if chunk_id was omitted or unrecognized placeholder: require matching doc chunk
         if not verify_quote_in_evidence(cit.quote, retrieved_texts + tool_texts):
             errors.append(
                 f"Citation {idx}: quote '{cit.quote[:60]}' not found in retrieved chunks."
             )
             continue
-        # Ensure doc_id matches at least one retrieved chunk containing the quote
         matching_retrieved = [
             c
             for c in retrieved_chunks
