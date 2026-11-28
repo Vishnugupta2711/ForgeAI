@@ -209,6 +209,14 @@ class JudgeReliabilityReport(BaseModel):
     passed_via_fallback_count: int = 0
     per_canary_type: list[CanaryMetric] = Field(default_factory=list)
     cases: list[CanaryCaseResult] = Field(default_factory=list)
+    hard_tier_total_canaries: int = 0
+    hard_tier_false_pass_rate: float = 0.0
+    hard_tier_false_fail_rate: float = 0.0
+    hard_tier_clean_pass_rate: float = 0.0
+    hard_tier_passed_cleanly_count: int = 0
+    hard_tier_passed_via_fallback_count: int = 0
+    hard_tier_per_canary_type: list[CanaryMetric] = Field(default_factory=list)
+    hard_tier_cases: list[CanaryCaseResult] = Field(default_factory=list)
 
     def save(self, path: Path | str) -> Path:
         """Write judge_reliability.json to disk."""

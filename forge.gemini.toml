@@ -31,6 +31,10 @@ max_calls_per_run = 1000
 max_latency_seconds_per_run = 3600.0
 min_improvement_delta = 0.02
 
+[judge]
+claim_support_threshold = 0.72
+claim_unsupport_threshold = 0.35
+
 [cache]
 enabled = true
 dir = ".cache/llm"

@@ -478,23 +478,351 @@ def build_canary_suite(
     return canaries
 
 
-def run_judge_selftest(
-    llm_client: LLMClient,
+_PARAPHRASE_SWAPS: tuple[tuple[str, str], ...] = (
+    (r"\bmust\b", "are required to"),
+    (r"\brequires\b", "mandates"),
+    (r"\brequire\b", "mandate"),
+    (r"\bincurs\b", "is subject to"),
+    (r"\breceives\b", "is granted"),
+    (r"\breceive\b", "are granted"),
+    (r"\bper calendar year\b", "each calendar year"),
+    (r"\bprior to\b", "before"),
+    (r"\bstrictly prohibited\b", "not allowed"),
+    (r"\bunused\b", "remaining"),
+    (r"\beffective_lead_days\b", "total effective lead days"),
+    (r"\blead_time_days\b", "base lead time days"),
+    (r"\bmin_order_qty\b", "minimum order quantity"),
+    (r"\bunit_price_usd\b", "unit price in USD"),
+)
+
+_TOPIC_STOPWORDS = frozenset(
+    {
+        "what", "when", "where", "which", "who", "how", "does", "this", "that", "with",
+        "from", "into", "their", "about", "there", "these", "those", "have", "will",
+        "would", "should", "could", "under", "within", "during", "between", "after",
+        "before", "other", "specific", "related", "general", "policy", "rules", "rule",
+        "documented", "confirms", "available", "strictly", "required",
+    }
+)
+
+
+def _paraphrase_answer(gold_answer_text: str) -> str:
+    """Deterministically reword and reorder clauses while keeping all facts & numbers."""
+    text = gold_answer_text.strip()
+    sents = [s.strip() for s in _SENTENCE_SPLIT_RE.split(text) if s.strip()]
+    if len(sents) >= 2:
+        sents = list(reversed(sents))
+    reordered: list[str] = []
+    for s in sents:
+        out = s
+        if "; " in out:
+            left, right = out.rstrip(".!?").split("; ", 1)
+            r_cap = right[0].upper() + right[1:] if right else right
+            l_low = left[0].lower() + left[1:] if left else left
+            out = f"{r_cap}; {l_low}."
+        elif ", and " in out:
+            left, right = out.rstrip(".!?").split(", and ", 1)
+            if len(left) > 15 and len(right) > 15:
+                out = f"{right[0].upper() + right[1:]} while {left[0].lower() + left[1:]}."
+        for pat, repl in _PARAPHRASE_SWAPS:
+            out = re.sub(pat, repl, out)
+        reordered.append(out)
+    return " ".join(reordered).strip() or gold_answer_text
+
+
+def _topic_focus_phrase(question: str, gold_answer_text: str) -> str:
+    words = [
+        w
+        for w in re.findall(r"[A-Za-z][A-Za-z0-9_-]{3,}", f"{question} {gold_answer_text}")
+        if w.lower() not in _TOPIC_STOPWORDS
+    ]
+    seen: list[str] = []
+    for w in words:
+        if w.lower() not in {x.lower() for x in seen}:
+            seen.append(w)
+        if len(seen) >= 3:
+            break
+    return " ".join(seen) if seen else "this requirement"
+
+
+def build_hard_canary_suite(
+    eval_set: EvalSet | None,
     chunk_map: dict[str, Chunk],
     *,
-    eval_set: EvalSet | None = None,
-    config: ForgeConfig | None = None,
     max_answer_bases: int = 2,
-    out_path: Path | str | None = None,
-) -> JudgeReliabilityReport:
-    """Execute the canary suite against Judge and report false-pass / false-fail rates."""
-    cfg = config or llm_client.config
-    judge = Judge(llm_client, config=cfg)
-    canaries = build_canary_suite(eval_set, chunk_map, max_answer_bases=max_answer_bases)
+) -> list[CanarySpec]:
+    """Construct the 5-type HARD canary tier from the same eval set (never written into runs)."""
+    all_chunks = list(chunk_map.values())
+    if not all_chunks:
+        return []
 
+    source_eval = eval_set if eval_set is not None else _fallback_eval_set_from_chunks(all_chunks)
+    all_cases = [*source_eval.dev_cases, *source_eval.held_out_cases]
+    answer_bases = [
+        c
+        for c in all_cases
+        if c.expected_behavior == "answer"
+        and c.key_facts
+        and any(ref.chunk_id in chunk_map for ref in c.expected_sources)
+    ]
+    if not answer_bases:
+        answer_bases = _fallback_eval_set_from_chunks(all_chunks).dev_cases[:2]
+
+    digit_bases = [b for b in answer_bases if any(_DIGIT_RE.search(kf) for kf in b.key_facts)]
+    selected_bases = (digit_bases + [b for b in answer_bases if b not in digit_bases])[
+        :max_answer_bases
+    ]
+    multi_fact_bases = [b for b in answer_bases if len(b.key_facts) >= 2]
+
+    hard_canaries: list[CanarySpec] = []
+    for idx, base in enumerate(selected_bases, start=1):
+        gold_chunks = [
+            chunk_map[ref.chunk_id]
+            for ref in base.expected_sources
+            if ref.chunk_id in chunk_map
+        ]
+        if not gold_chunks:
+            continue
+        primary = gold_chunks[0]
+        retrieved = [
+            RetrievedChunkRecord(
+                chunk_id=ch.chunk_id,
+                doc_id=ch.doc_id,
+                score=0.016,
+                page=ch.page,
+                section_heading=ch.section_heading,
+            )
+            for ch in gold_chunks
+        ]
+        gold_answer_text, gold_quote = _build_natural_gold_answer(base, gold_chunks)
+        valid_citation = Citation(
+            doc_id=primary.doc_id,
+            chunk_id=primary.chunk_id,
+            quote=gold_quote[:120],
+        )
+
+        def _rec(output: AgentOutput, ret=retrieved, q=base.question) -> AnswerRecord:
+            return AnswerRecord(
+                question=q,
+                output=output,
+                retrieved_chunks=ret,
+                tool_calls=[],
+                trace=["hard_canary"],
+                effective_query=q,
+                model="canary",
+            )
+
+        # H1. paraphrased_correct (expected PASS)
+        hard_canaries.append(
+            CanarySpec(
+                canary_id=f"HARD-PARA-{idx}",
+                canary_type="paraphrased_correct",
+                expected_pass=True,
+                eval_case=base,
+                answer_record=_rec(
+                    AgentOutput(
+                        answer=_paraphrase_answer(gold_answer_text),
+                        citations=[valid_citation],
+                        refused=False,
+                        confidence=0.92,
+                    )
+                ),
+            )
+        )
+
+        # H3. subtle_hallucination (expected FAIL on grounding)
+        topic_phrase = _topic_focus_phrase(base.question, gold_answer_text)
+        if idx % 2 == 1:
+            fab_sentence = (
+                f"For {topic_phrase}, an automatic 19 percent reserve buffer applies "
+                "whenever Tuesday cutoff windows close early."
+            )
+        else:
+            fab_sentence = (
+                f"However, exceptional requests involving {topic_phrase} require prior "
+                "countersignature from the regional compliance deputy before confirmation."
+            )
+        hard_canaries.append(
+            CanarySpec(
+                canary_id=f"HARD-SUBTLE-{idx}",
+                canary_type="subtle_hallucination",
+                expected_pass=False,
+                eval_case=base,
+                answer_record=_rec(
+                    AgentOutput(
+                        answer=f"{gold_answer_text} {fab_sentence}",
+                        citations=[valid_citation],
+                        refused=False,
+                        confidence=0.88,
+                    )
+                ),
+            )
+        )
+
+        # H4. wrong_entity_same_shape (expected FAIL: valid chunk/shape for wrong entity/item)
+        same_doc_alt = next(
+            (
+                c
+                for c in all_chunks
+                if c.doc_id == primary.doc_id
+                and c.chunk_id != primary.chunk_id
+                and not any(
+                    canonicalize_text(kf) in canonicalize_text(c.text) for kf in base.key_facts
+                )
+            ),
+            next(
+                (
+                    c
+                    for c in all_chunks
+                    if c.chunk_id != primary.chunk_id
+                    and not any(
+                        canonicalize_text(kf) in canonicalize_text(c.text) for kf in base.key_facts
+                    )
+                ),
+                primary,
+            ),
+        )
+        if _is_csv_row_chunk(same_doc_alt):
+            alt_fields = []
+            for ln in same_doc_alt.text.splitlines()[:3]:
+                if ":" in ln:
+                    k, v = ln.split(":", 1)
+                    alt_fields.append(f"{k.strip().replace('_', ' ')} is {v.strip()}")
+            alt_answer = (", ".join(alt_fields) + ".") if alt_fields else same_doc_alt.text[:100]
+            alt_quote = same_doc_alt.text.splitlines()[0][:120]
+        else:
+            alt_lines = [
+                ln.strip() for ln in same_doc_alt.text.splitlines() if len(ln.strip()) >= 12
+            ]
+            alt_answer = alt_lines[0][:180] if alt_lines else same_doc_alt.text[:180]
+            alt_quote = alt_answer[:120]
+        hard_canaries.append(
+            CanarySpec(
+                canary_id=f"HARD-ENTITY-{idx}",
+                canary_type="wrong_entity_same_shape",
+                expected_pass=False,
+                eval_case=base,
+                answer_record=_rec(
+                    AgentOutput(
+                        answer=alt_answer,
+                        citations=[
+                            Citation(
+                                doc_id=same_doc_alt.doc_id,
+                                chunk_id=same_doc_alt.chunk_id,
+                                quote=alt_quote,
+                            )
+                        ],
+                        refused=False,
+                        confidence=0.82,
+                    ),
+                    ret=[
+                        RetrievedChunkRecord(
+                            chunk_id=same_doc_alt.chunk_id,
+                            doc_id=same_doc_alt.doc_id,
+                            score=0.015,
+                        )
+                    ],
+                ),
+            )
+        )
+
+        # H5. correct_with_hedging (expected PASS)
+        lowered = (
+            gold_answer_text[0].lower() + gold_answer_text[1:]
+            if len(gold_answer_text) > 1
+            else gold_answer_text
+        )
+        hedged_answer = (
+            f"It appears from the available documents that, in general, {lowered}"
+        )
+        hard_canaries.append(
+            CanarySpec(
+                canary_id=f"HARD-HEDGE-{idx}",
+                canary_type="correct_with_hedging",
+                expected_pass=True,
+                eval_case=base,
+                answer_record=_rec(
+                    AgentOutput(
+                        answer=hedged_answer,
+                        citations=[valid_citation],
+                        refused=False,
+                        confidence=0.80,
+                    )
+                ),
+            )
+        )
+
+    # H2. partial_correct_two_facts (expected FAIL on correctness)
+    partial_sources = multi_fact_bases[:max_answer_bases] if multi_fact_bases else selected_bases
+    for idx, p_base in enumerate(partial_sources, start=1):
+        p_chunks = [
+            chunk_map[ref.chunk_id]
+            for ref in p_base.expected_sources
+            if ref.chunk_id in chunk_map
+        ]
+        if not p_chunks:
+            continue
+        p_primary = p_chunks[0]
+        p_ret = [
+            RetrievedChunkRecord(
+                chunk_id=ch.chunk_id,
+                doc_id=ch.doc_id,
+                score=0.016,
+                page=ch.page,
+                section_heading=ch.section_heading,
+            )
+            for ch in p_chunks
+        ]
+        if len(p_base.key_facts) >= 2:
+            half_case = p_base.model_copy(update={"key_facts": [p_base.key_facts[0]]})
+            partial_text, p_quote = _build_natural_gold_answer(half_case, p_chunks)
+        else:
+            # Single-fact fallback: omit half the clause so required key details are missing
+            kf_words = p_base.key_facts[0].split()
+            partial_text = " ".join(kf_words[: max(2, len(kf_words) // 2)]) + "."
+            p_quote = p_primary.text.splitlines()[0][:120]
+
+        hard_canaries.append(
+            CanarySpec(
+                canary_id=f"HARD-PARTIAL-{idx}",
+                canary_type="partial_correct_two_facts",
+                expected_pass=False,
+                eval_case=p_base,
+                answer_record=AnswerRecord(
+                    question=p_base.question,
+                    output=AgentOutput(
+                        answer=partial_text,
+                        citations=[
+                            Citation(
+                                doc_id=p_primary.doc_id,
+                                chunk_id=p_primary.chunk_id,
+                                quote=p_quote[:120],
+                            )
+                        ],
+                        refused=False,
+                        confidence=0.85,
+                    ),
+                    retrieved_chunks=p_ret,
+                    tool_calls=[],
+                    trace=["hard_canary"],
+                    effective_query=p_base.question,
+                    model="canary",
+                ),
+            )
+        )
+
+    return hard_canaries
+
+
+def _score_canary_specs(
+    judge: Judge,
+    specs: list[CanarySpec],
+    chunk_map: dict[str, Chunk],
+) -> tuple[list[CanaryCaseResult], list[CanaryMetric], dict[str, float | int]]:
+    """Score a canary spec list and return (cases, per_type, aggregate_stats)."""
     case_results: list[CanaryCaseResult] = []
     grouped: dict[str, list[CanaryCaseResult]] = {}
-    for spec in canaries:
+    for spec in specs:
         verdict = judge.evaluate_case(spec.eval_case, spec.answer_record, chunk_map)
         item = CanaryCaseResult(
             canary_id=spec.canary_id,
@@ -547,22 +875,59 @@ def run_judge_selftest(
             )
         )
 
-    report = JudgeReliabilityReport(
-        judge_model=cfg.models.judge,
-        total_canaries=len(case_results),
-        overall_false_pass_rate=(
+    stats: dict[str, float | int] = {
+        "total": len(case_results),
+        "false_pass_rate": (
             round(total_false_passes / total_negatives, 4) if total_negatives else 0.0
         ),
-        overall_false_fail_rate=(
+        "false_fail_rate": (
             round(total_false_fails / total_positives, 4) if total_positives else 0.0
         ),
-        overall_clean_pass_rate=(
+        "clean_pass_rate": (
             round(total_clean_passes / total_positives, 4) if total_positives else 0.0
         ),
-        passed_cleanly_count=total_clean_passes,
-        passed_via_fallback_count=total_fallback_passes,
+        "passed_cleanly_count": total_clean_passes,
+        "passed_via_fallback_count": total_fallback_passes,
+    }
+    return case_results, per_type, stats
+
+
+def run_judge_selftest(
+    llm_client: LLMClient,
+    chunk_map: dict[str, Chunk],
+    *,
+    eval_set: EvalSet | None = None,
+    config: ForgeConfig | None = None,
+    max_answer_bases: int = 2,
+    out_path: Path | str | None = None,
+) -> JudgeReliabilityReport:
+    """Execute standard + hard canary suites against Judge and report reliability separately."""
+    cfg = config or llm_client.config
+    judge = Judge(llm_client, config=cfg)
+    canaries = build_canary_suite(eval_set, chunk_map, max_answer_bases=max_answer_bases)
+    hard_canaries = build_hard_canary_suite(eval_set, chunk_map, max_answer_bases=max_answer_bases)
+
+    case_results, per_type, std_stats = _score_canary_specs(judge, canaries, chunk_map)
+    hard_results, hard_per_type, hard_stats = _score_canary_specs(judge, hard_canaries, chunk_map)
+
+    report = JudgeReliabilityReport(
+        judge_model=cfg.models.judge,
+        total_canaries=int(std_stats["total"]),
+        overall_false_pass_rate=float(std_stats["false_pass_rate"]),
+        overall_false_fail_rate=float(std_stats["false_fail_rate"]),
+        overall_clean_pass_rate=float(std_stats["clean_pass_rate"]),
+        passed_cleanly_count=int(std_stats["passed_cleanly_count"]),
+        passed_via_fallback_count=int(std_stats["passed_via_fallback_count"]),
         per_canary_type=per_type,
         cases=case_results,
+        hard_tier_total_canaries=int(hard_stats["total"]),
+        hard_tier_false_pass_rate=float(hard_stats["false_pass_rate"]),
+        hard_tier_false_fail_rate=float(hard_stats["false_fail_rate"]),
+        hard_tier_clean_pass_rate=float(hard_stats["clean_pass_rate"]),
+        hard_tier_passed_cleanly_count=int(hard_stats["passed_cleanly_count"]),
+        hard_tier_passed_via_fallback_count=int(hard_stats["passed_via_fallback_count"]),
+        hard_tier_per_canary_type=hard_per_type,
+        hard_tier_cases=hard_results,
     )
 
     if out_path is not None:

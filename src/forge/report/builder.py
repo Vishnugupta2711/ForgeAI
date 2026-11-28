@@ -703,6 +703,25 @@ def build_report(
                 f"- **Overall False-Fail Rate**: `{judge_rel.overall_false_fail_rate * 100:.1f}%`",
             ]
         )
+        if judge_rel.hard_tier_total_canaries > 0:
+            lines.extend(
+                [
+                    f"- **Hard-Tier Canaries Evaluated**: `{judge_rel.hard_tier_total_canaries}`",
+                    (
+                        f"- **Hard-Tier Clean / Fallback Passes**: "
+                        f"`{judge_rel.hard_tier_passed_cleanly_count}` / "
+                        f"`{judge_rel.hard_tier_passed_via_fallback_count}`"
+                    ),
+                    (
+                        f"- **Hard-Tier False-Pass Rate**: "
+                        f"`{judge_rel.hard_tier_false_pass_rate * 100:.1f}%`"
+                    ),
+                    (
+                        f"- **Hard-Tier False-Fail Rate**: "
+                        f"`{judge_rel.hard_tier_false_fail_rate * 100:.1f}%`"
+                    ),
+                ]
+            )
     else:
         lines.append("- Judge self-test reliability report not available.")
 

@@ -308,7 +308,7 @@ def test_j2_csv_canaries_use_natural_sentences_and_clean_pass_reporting(tmp_path
         )
 
     rel = run_judge_selftest(
-        FakeLLM(responses=[_middle_ok] * 20),
+        FakeLLM(responses=[_middle_ok] * 80),
         chunk_map,
         eval_set=eval_set,
         out_path=tmp_path / "judge_reliability.json",
