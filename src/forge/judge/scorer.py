@@ -17,6 +17,8 @@ from forge.ingest.models import Chunk
 from forge.judge.deterministic import (
     _NUMBER_RE,
     _canon_number,
+    _normalize_quote_str,
+    _segment_in_evidence,
     canonicalize_text,
     check_citation_validity,
     check_refusal,
@@ -123,6 +125,104 @@ def _reason_checks_out(reason: str, claim: str, evidence_texts: list[str]) -> bo
     return bool(r_tokens & ev_tokens)
 
 
+_CSV_FIELD_LINE_RE = re.compile(r"^\s*([A-Za-z][A-Za-z0-9_ ]{1,60}):\s*(.*?)\s*$")
+_ID_CODE_RE = re.compile(r"\b[A-Za-z]{1,4}-\d{2,}[A-Za-z0-9-]*\b")
+_MAX_CSV_SHORT_CLAIM_TOKENS = 16
+
+
+def _match_csv_row_claim(
+    claim: str,
+    evidence_items: list[str],
+) -> tuple[str | None, str]:
+    """Deterministically match a short claim against retrieved CSV row field_name: value pairs.
+
+    Returns ("SUPPORTED", quote), ("UNSUPPORTED", reason), or (None, "").
+    """
+    c_tokens = set(_claim_tokens(claim))
+    if not c_tokens or len(c_tokens) > _MAX_CSV_SHORT_CLAIM_TOKENS:
+        return None, ""
+    canon_claim = canonicalize_text(claim)
+    c_nums = {_canon_number(n) for n in _NUMBER_RE.findall(canon_claim)}
+    claim_codes = {m.lower() for m in _ID_CODE_RE.findall(claim)}
+
+    saw_field_number_conflict = False
+    has_non_csv_num_support = False
+
+    for ev in evidence_items:
+        lines = [ln for ln in ev.splitlines() if ln.strip()]
+        parsed_fields: list[tuple[str, str, str]] = []
+        for ln in lines:
+            m = _CSV_FIELD_LINE_RE.match(ln)
+            if m:
+                parsed_fields.append((m.group(1).strip(), m.group(2).strip(), ln.strip()))
+        # Require tabular row shape (multiple key: value fields, typically snake_case columns)
+        is_csv_row = len(parsed_fields) >= 3 or (
+            len(parsed_fields) >= 2 and any("_" in k for k, _, _ in parsed_fields)
+        )
+        if not is_csv_row:
+            if c_nums:
+                canon_ev = canonicalize_text(ev)
+                ev_nums = {_canon_number(n) for n in _NUMBER_RE.findall(canon_ev)}
+                ev_tokens = set(_claim_tokens(ev))
+                if c_nums.issubset(ev_nums) and len(c_tokens & ev_tokens) / len(c_tokens) >= 0.35:
+                    has_non_csv_num_support = True
+            continue
+
+        ev_lower = ev.lower()
+        if claim_codes and not all(code in ev_lower for code in claim_codes):
+            continue
+
+        matched_lines: list[str] = []
+        matched_tokens: set[str] = set()
+        matched_field_nums: set[str] = set()
+        has_non_numeric_val_match = False
+
+        for f_key, f_val, raw_ln in parsed_fields:
+            fk_tokens = _claim_tokens(f_key)
+            if not fk_tokens:
+                continue
+            fk_set = set(fk_tokens)
+            overlap_fk = len(fk_set & c_tokens) / len(fk_set)
+            key_ok = fk_set.issubset(c_tokens) or (len(fk_set) >= 3 and overlap_fk >= 0.66)
+            if not key_ok:
+                continue
+
+            fv_canon = canonicalize_text(f_val)
+            fv_tokens = _claim_tokens(f_val)
+            fv_nums = {_canon_number(n) for n in _NUMBER_RE.findall(fv_canon)}
+
+            if fv_nums:
+                if not fv_nums.issubset(c_nums):
+                    if c_nums:
+                        saw_field_number_conflict = True
+                    continue
+                matched_field_nums.update(fv_nums)
+                matched_tokens.update(fk_set & c_tokens)
+                matched_tokens.update(set(fv_tokens) & c_tokens)
+                matched_lines.append(raw_ln)
+            elif fv_tokens and set(fv_tokens).issubset(c_tokens):
+                has_non_numeric_val_match = True
+                matched_tokens.update(fk_set & c_tokens)
+                matched_tokens.update(fv_tokens)
+                matched_lines.append(raw_ln)
+
+        if not matched_lines:
+            continue
+        # Numbers in claim must match the matched field's numbers in that same row
+        if c_nums:
+            if c_nums != matched_field_nums:
+                continue
+        elif not has_non_numeric_val_match:
+            continue
+
+        if len(matched_tokens) / len(c_tokens) >= 0.50:
+            return "SUPPORTED", matched_lines[0][:120]
+
+    if saw_field_number_conflict and not has_non_csv_num_support:
+        return "UNSUPPORTED", "CSV field value mismatch for claimed number."
+    return None, ""
+
+
 class _ClaimVerdictItem(BaseModel):
     claim_index: int
     supported: bool
@@ -134,9 +234,55 @@ class _ClaimVerdictList(BaseModel):
     verdicts: list[_ClaimVerdictItem] = Field(default_factory=list)
 
 
+class _MissingFactQuote(BaseModel):
+    fact: str = ""
+    answer_quote: str = ""
+
+
 class _CorrectnessVerdict(BaseModel):
     correct: bool
+    missing_fact_quotes: list[_MissingFactQuote] = Field(default_factory=list)
     reason: str = ""
+
+
+def _verify_missing_fact_quotes(
+    missed_facts: list[str],
+    provided: list[_MissingFactQuote],
+    answer_text: str,
+) -> bool:
+    """Verify every missed key fact has an answer substring quote with exact matching numbers."""
+    if not missed_facts:
+        return True
+    norm_ans = _normalize_quote_str(answer_text)
+    if not norm_ans:
+        return False
+
+    by_canon: dict[str, str] = {}
+    by_lower: dict[str, str] = {}
+    for item in provided:
+        q = item.answer_quote.strip()
+        if not q:
+            continue
+        cf = canonicalize_text(item.fact)
+        if cf:
+            by_canon[cf] = q
+        lf = item.fact.strip().lower()
+        if lf:
+            by_lower[lf] = q
+
+    for fact in missed_facts:
+        ans_quote = by_canon.get(canonicalize_text(fact)) or by_lower.get(fact.strip().lower(), "")
+        if len(ans_quote) < 4:
+            return False
+        norm_q = _normalize_quote_str(ans_quote)
+        if not norm_q or not _segment_in_evidence(norm_q, norm_ans):
+            return False
+        fact_nums = {_canon_number(n) for n in _NUMBER_RE.findall(canonicalize_text(fact))}
+        quote_nums = {_canon_number(n) for n in _NUMBER_RE.findall(canonicalize_text(ans_quote))}
+        if quote_nums != fact_nums:
+            return False
+
+    return True
 
 
 class Judge:
@@ -305,7 +451,29 @@ class Judge:
                     reason=f"Deterministic ungrounded claim (overlap={overlap:.2f}).",
                 )
             else:
-                middle_claims.append(claim)
+                csv_status, csv_info = _match_csv_row_claim(claim, evidence_texts)
+                if csv_status == "SUPPORTED":
+                    claim_states[claim] = ClaimVerification(
+                        claim=claim,
+                        supported=True,
+                        quote=csv_info,
+                        verified_substring=True,
+                        status="supported",
+                        method="deterministic_csv",
+                        reason="Deterministic CSV field-level match.",
+                    )
+                elif csv_status == "UNSUPPORTED":
+                    claim_states[claim] = ClaimVerification(
+                        claim=claim,
+                        supported=False,
+                        quote="",
+                        verified_substring=False,
+                        status="unsupported",
+                        method="deterministic_csv",
+                        reason=csv_info,
+                    )
+                else:
+                    middle_claims.append(claim)
 
         uncertain_claims = 0
         used_fallback = False
@@ -455,21 +623,28 @@ class Judge:
         key_facts: list[str],
         answer_text: str,
         *,
+        missed_facts: list[str] | None = None,
         deterministic_fallback: bool,
     ) -> tuple[bool, bool, list[str]]:
-        """Run 2-pass order-shuffled correctness check when key_fact_recall is ambiguous."""
+        """Run 2-pass order-shuffled correctness check; never accept bare correct=True."""
         tpl = load_prompt("judge_correctness.v1.md")
+        missing = list(missed_facts or [])
+        fallback_val = False if missing else deterministic_fallback
 
-        def _call(ordered_facts: list[str]) -> bool:
+        def _call(ordered_facts: list[str]) -> tuple[bool, list[str]]:
             facts_block = (
                 "\n".join(f"- {f}" for f in ordered_facts)
                 if ordered_facts
                 else "(No key facts provided; check whether answer directly addresses question.)"
             )
+            missing_block = (
+                "\n".join(f"- {f}" for f in missing) if missing else "(none)"
+            )
             res = self.llm_client.json(
                 tpl.format(
                     question=question,
                     key_facts_block=facts_block,
+                    missing_facts_block=missing_block,
                     answer=answer_text,
                 ),
                 schema=_CorrectnessVerdict,
@@ -479,28 +654,40 @@ class Judge:
                 role="judge",
                 max_repairs=2,
             )
-            return bool(res.correct)
+            if not res.correct:
+                return False, []
+            if missing and not _verify_missing_fact_quotes(
+                missing, res.missing_fact_quotes, answer_text
+            ):
+                return (
+                    False,
+                    [
+                        "LLM marked correct=True without verified answer quotes/numbers "
+                        "for all missed key facts; rejected."
+                    ],
+                )
+            return True, []
 
         try:
-            first = _call(key_facts)
-            second_order = list(reversed(key_facts)) if len(key_facts) >= 2 else list(key_facts)
-            second = _call(second_order) if len(key_facts) >= 2 else first
+            first, first_notes = _call(key_facts)
+            if len(key_facts) >= 2:
+                second, second_notes = _call(list(reversed(key_facts)))
+            else:
+                second, second_notes = first, []
         except LLMProviderError:
             raise
         except Exception as exc:
             return (
-                deterministic_fallback,
+                fallback_val,
                 True,
                 [f"LLM correctness check failed ({exc}); deterministic fallback."],
             )
 
+        notes = list(dict.fromkeys(first_notes + second_notes))
         if first != second:
-            return (
-                deterministic_fallback,
-                True,
-                ["Position bias disagreement in LLM correctness; deterministic fallback."],
-            )
-        return first, False, []
+            notes.append("Position bias disagreement in LLM correctness; deterministic fallback.")
+            return fallback_val, True, notes
+        return first, False, notes
 
     def evaluate_case(
         self,
@@ -599,19 +786,31 @@ class Judge:
         elif case.key_facts:
             if recall == 1.0:
                 correct = True
-            elif recall == 0.0:
-                correct = False
             else:
-                correct, corr_uncertain, corr_notes = self._judge_ambiguous_correctness(
-                    case.question,
-                    case.key_facts,
-                    out.answer,
-                    deterministic_fallback=(recall >= 0.5),
+                # Fast-fail if any missed fact contains numbers completely absent from the answer
+                ans_nums = {
+                    _canon_number(n) for n in _NUMBER_RE.findall(canonicalize_text(out.answer))
+                }
+                nums_possible = all(
+                    {_canon_number(n) for n in _NUMBER_RE.findall(canonicalize_text(f))}.issubset(
+                        ans_nums
+                    )
+                    for f in missed_facts
                 )
-                reasons.extend(corr_notes)
-                if corr_uncertain:
-                    uncertain = True
-                    pos_disagreement = True
+                if not nums_possible or not out.answer.strip():
+                    correct = False
+                else:
+                    correct, corr_uncertain, corr_notes = self._judge_ambiguous_correctness(
+                        case.question,
+                        case.key_facts,
+                        out.answer,
+                        missed_facts=missed_facts,
+                        deterministic_fallback=False,
+                    )
+                    reasons.extend(corr_notes)
+                    if corr_uncertain:
+                        uncertain = True
+                        pos_disagreement = True
         else:
             # Clarify / factless cases
             correct, corr_uncertain, corr_notes = self._judge_ambiguous_correctness(
