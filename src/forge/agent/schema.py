@@ -96,7 +96,7 @@ class AgentRetrievalSettings(BaseModel):
     hybrid_alpha: float = Field(default=0.5, ge=0.0, le=1.0)
     rerank: bool = False
     query_rewrite: bool = False
-    min_score: float | None = Field(default=None, ge=0.0)
+    min_score: float | None = Field(default=None, ge=0.0, le=1.0)
 
     @model_validator(mode="after")
     def _validate_overlap(self) -> AgentRetrievalSettings:

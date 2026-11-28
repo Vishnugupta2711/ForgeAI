@@ -6,6 +6,7 @@ import json
 import re
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from rank_bm25 import BM25Okapi
@@ -20,6 +21,19 @@ _TOKEN_RE = re.compile(r"[a-z0-9]+")
 def tokenize(text: str) -> list[str]:
     """Lowercase alphanumeric tokenizer for BM25 indexing and querying."""
     return _TOKEN_RE.findall(text.lower())
+
+
+def rrf_max_score(rrf_k: int = 60) -> float:
+    """Return theoretical maximum raw RRF score (rank 1 across contributing signals)."""
+    return 1.0 / (max(1, rrf_k) + 1)
+
+
+def normalize_rrf_score(raw_score: float, *, rrf_k: int = 60) -> float:
+    """Normalize a raw RRF score onto [0.0, 1.0] relative to theoretical max."""
+    max_score = rrf_max_score(rrf_k)
+    if max_score <= 0.0:
+        return 0.0
+    return round(min(1.0, max(0.0, raw_score / max_score)), 6)
 
 
 def _chunk_bm25_tokens(chunk: Chunk) -> list[str]:
@@ -158,6 +172,27 @@ class HybridRetriever:
         self.config = config or RetrievalConfig()
         self.query_rewrite_hook = query_rewrite_hook
 
+    def raw_score_max(self) -> float:
+        """Theoretical maximum raw RRF fused score for this retriever."""
+        return rrf_max_score(self.config.rrf_k)
+
+    def normalize_score(self, raw_score: float) -> float:
+        """Normalize a raw RRF score into [0.0, 1.0]."""
+        return normalize_rrf_score(raw_score, rrf_k=self.config.rrf_k)
+
+    def score_scale(self) -> dict[str, Any]:
+        """Expose raw RRF bounds and normalized min_score range for callers/optimizers."""
+        return {
+            "scale": "normalized_0_to_1",
+            "raw_mechanism": "rrf",
+            "rrf_k": self.config.rrf_k,
+            "raw_min": 0.0,
+            "raw_max": round(self.raw_score_max(), 6),
+            "normalized_min": 0.0,
+            "normalized_max": 1.0,
+            "max_safe_min_score": 0.7,
+        }
+
     def search(
         self,
         query: str,
@@ -233,7 +268,8 @@ class HybridRetriever:
 
             if fused <= 0.0:
                 continue
-            if resolved_min is not None and fused < resolved_min:
+            norm_score = self.normalize_score(fused)
+            if resolved_min is not None and norm_score < resolved_min:
                 continue
 
             hits.append(
@@ -244,7 +280,10 @@ class HybridRetriever:
                     dense_rank=d_rank,
                     bm25_score=round(float(bm25_scores[idx]), 6),
                     dense_score=round(float(dense_scores[idx]), 6),
-                    metadata={"effective_query": effective_query},
+                    metadata={
+                        "effective_query": effective_query,
+                        "normalized_score": f"{norm_score:.6f}",
+                    },
                 )
             )
 

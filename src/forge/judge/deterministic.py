@@ -36,6 +36,18 @@ _UNIT_REPLACEMENTS: list[tuple[re.Pattern[str], str]] = [
 
 _CURRENCY_MAP = {"$": "usd", "€": "eur", "£": "gbp"}
 _MONTH_FORMATS = ("%B %d %Y", "%b %d %Y")
+_SNAKE_UNDERSCORE_RE = re.compile(r"(?<=[a-zA-Z])_(?=[a-zA-Z])")
+_ABBR_REPLACEMENTS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\bmoq\b"), "minimum order quantity"),
+    (re.compile(r"(?<!\d )\bmin\b"), "minimum"),
+    (re.compile(r"\bmax\b"), "maximum"),
+    (re.compile(r"\bqty\b"), "quantity"),
+    (re.compile(r"\bpct\b"), "percent"),
+    (re.compile(r"\bavg\b"), "average"),
+    (re.compile(r"\bstd\b"), "standard"),
+    (re.compile(r"\best\b"), "estimated"),
+    (re.compile(r"\bapprox\b"), "approximately"),
+]
 
 
 def _canon_number(raw: str) -> str:
@@ -88,8 +100,11 @@ def canonicalize_text(text: str) -> str:
         out,
     )
     out = out.lower()
+    out = _SNAKE_UNDERSCORE_RE.sub(" ", out)
     out = _NUMBER_RE.sub(lambda m: _canon_number(m.group(1)), out)
     for pattern, repl in _UNIT_REPLACEMENTS:
+        out = pattern.sub(repl, out)
+    for pattern, repl in _ABBR_REPLACEMENTS:
         out = pattern.sub(repl, out)
     out = _WHITESPACE_RE.sub(" ", out).strip()
     return out

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -70,6 +70,7 @@ class EvalSet(BaseModel):
     held_out_category_counts: dict[str, int] = Field(default_factory=dict)
     rejected_counts_by_reason: dict[str, int] = Field(default_factory=dict)
     scaled_quotas_note: str | None = None
+    provenance: dict[str, Any] = Field(default_factory=dict)
 
     @property
     def total_cases(self) -> int:

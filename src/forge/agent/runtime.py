@@ -195,9 +195,9 @@ class AgentRuntime:
         if self.definition.retrieval.min_score is not None:
             threshold = self.definition.retrieval.min_score
             before = len(hits)
-            hits = [h for h in hits if h.score >= threshold]
+            hits = [h for h in hits if retriever.normalize_score(h.score) >= threshold]
             trace.append(
-                f"min_score gate ({threshold}): kept {len(hits)}/{before} chunks"
+                f"min_score gate ({threshold} normalized): kept {len(hits)}/{before} chunks"
             )
 
         if self.definition.retrieval.rerank and hits:

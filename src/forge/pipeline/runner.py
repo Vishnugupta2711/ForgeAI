@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -34,6 +35,42 @@ STAGE_ORDER = [
     "optimize",
     "report",
 ]
+
+ROLES: tuple[str, ...] = ("agent", "judge", "eval_writer", "embed")
+
+STAGE_ROLE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
+    "ingest": ("embed",),
+    "intake": ("agent",),
+    "groundability": ("judge", "embed"),
+    "generate": ("agent", "embed"),
+    "evals": ("eval_writer", "embed", "agent"),
+    "judge_selftest": ("judge", "embed"),
+    "optimize": ("agent", "judge", "embed"),
+    "report": ("judge",),
+}
+
+
+def _role_config_hash(provider: str, model: str) -> str:
+    return hashlib.sha256(f"{provider}:{model}".encode()).hexdigest()[:16]
+
+
+def compute_role_snapshot(
+    cfg: ForgeConfig,
+) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
+    """Return (providers_by_role, models_by_role, hashes_by_role) for current config."""
+    providers = cfg.providers_by_role()
+    models = {
+        "agent": cfg.models.agent,
+        "judge": cfg.models.judge,
+        "eval_writer": cfg.models.eval_writer,
+        "embed": cfg.models.embed,
+    }
+    hashes = {r: _role_config_hash(providers.get(r, ""), models.get(r, "")) for r in ROLES}
+    return providers, models, hashes
+
+
+class PipelineResumeError(RuntimeError):
+    """Raised when --resume detects changed model/provider config without --allow-model-change."""
 
 
 def _fast_quotas(has_tools: bool) -> dict[EvalCategory, int]:
@@ -72,6 +109,10 @@ class PipelineState(BaseModel):
     profile: str = "default"
     providers: dict[str, str] = Field(default_factory=dict)
     models: dict[str, str] = Field(default_factory=dict)
+    role_hashes: dict[str, str] = Field(default_factory=dict)
+    stage_role_hashes: dict[str, dict[str, str]] = Field(default_factory=dict)
+    stage_models: dict[str, dict[str, dict[str, str]]] = Field(default_factory=dict)
+    model_change_history: list[dict[str, Any]] = Field(default_factory=list)
     fast_mode: bool = False
     strict: bool = False
     max_iters: int = 3
@@ -145,6 +186,7 @@ class ForgePipeline:
         strict: bool = False,
         fast: bool = False,
         resume: bool = False,
+        allow_model_change: bool = False,
         time_budget_min: float | None = None,
         stage_hooks: dict[str, Callable[[], None]] | None = None,
     ) -> PipelineState:
@@ -162,9 +204,84 @@ class ForgePipeline:
 
         resolved_max_iters = min(max_iters, 2) if fast else min(3, max(1, max_iters))
         state_file = out_path / "pipeline_state.json"
+        new_providers, new_models, new_hashes = compute_role_snapshot(self.config)
+        stage_snapshot = {
+            r: {"provider": new_providers.get(r, ""), "model": new_models.get(r, "")}
+            for r in ROLES
+        }
 
         if resume and state_file.is_file():
             state = PipelineState.model_validate_json(state_file.read_text(encoding="utf-8"))
+            old_hashes = dict(state.role_hashes)
+            if not old_hashes:
+                old_hashes = {
+                    r: _role_config_hash(state.providers.get(r, ""), state.models.get(r, ""))
+                    for r in ROLES
+                }
+
+            changed_roles: dict[str, dict[str, str]] = {}
+            for r in ROLES:
+                if old_hashes.get(r) != new_hashes[r]:
+                    changed_roles[r] = {
+                        "old_provider": state.providers.get(r, ""),
+                        "old_model": state.models.get(r, ""),
+                        "new_provider": new_providers.get(r, ""),
+                        "new_model": new_models.get(r, ""),
+                    }
+            # Also check per-stage hashes in case an earlier completed stage used a different model
+            for comp_stage in state.completed_stages:
+                s_hashes = state.stage_role_hashes.get(comp_stage, {})
+                s_models = state.stage_models.get(comp_stage, {})
+                for r in STAGE_ROLE_DEPENDENCIES.get(comp_stage, ()):
+                    if s_hashes.get(r) and s_hashes[r] != new_hashes[r] and r not in changed_roles:
+                        changed_roles[r] = {
+                            "old_provider": s_models.get(r, {}).get("provider", ""),
+                            "old_model": s_models.get(r, {}).get("model", ""),
+                            "new_provider": new_providers.get(r, ""),
+                            "new_model": new_models.get(r, ""),
+                        }
+
+            if changed_roles:
+                earliest_idx = len(STAGE_ORDER)
+                for idx_s, s_name in enumerate(STAGE_ORDER):
+                    deps = set(STAGE_ROLE_DEPENDENCIES.get(s_name, ()))
+                    if deps & set(changed_roles):
+                        earliest_idx = min(earliest_idx, idx_s)
+                        break
+                downstream = STAGE_ORDER[earliest_idx:]
+                would_invalidate = [s for s in downstream if s in state.completed_stages]
+                report_stages = would_invalidate or downstream
+                if not allow_model_change:
+                    role_details = "; ".join(
+                        f"role '{r}' changed from {info['old_provider']}/{info['old_model']} "
+                        f"to {info['new_provider']}/{info['new_model']}"
+                        for r, info in sorted(changed_roles.items())
+                    )
+                    raise PipelineResumeError(
+                        f"Refusing --resume because model config changed: {role_details}. "
+                        f"Stages that would be invalidated: {report_stages}. "
+                        "Pass --allow-model-change to invalidate and re-run dependent stages."
+                    )
+                invalidate_set = set(downstream)
+                state.completed_stages = [
+                    s for s in state.completed_stages if s not in invalidate_set
+                ]
+                for s_name in downstream:
+                    state.stage_timings_seconds.pop(s_name, None)
+                    state.stage_role_hashes.pop(s_name, None)
+                    state.stage_models.pop(s_name, None)
+                state.model_change_history.append(
+                    {
+                        "changed_roles": changed_roles,
+                        "invalidated_stages": report_stages,
+                    }
+                )
+                state.profile = self.config.profile
+                state.providers = new_providers
+                state.models = new_models
+                state.role_hashes = new_hashes
+                state.save(out_path)
+
             state.failed_stage = None
             state.error = None
             if time_budget_min is not None:
@@ -175,18 +292,23 @@ class ForgePipeline:
                 docs_dir=str(docs_path),
                 out_dir=str(out_path),
                 profile=self.config.profile,
-                providers=self.config.providers_by_role(),
-                models={
-                    "agent": self.config.models.agent,
-                    "judge": self.config.models.judge,
-                    "eval_writer": self.config.models.eval_writer,
-                    "embed": self.config.models.embed,
-                },
+                providers=new_providers,
+                models=new_models,
+                role_hashes=new_hashes,
                 fast_mode=fast,
                 strict=strict,
                 max_iters=resolved_max_iters,
                 time_budget_min=time_budget_min,
             )
+            state.save(out_path)
+
+        def _mark_stage_done(stage_name: str, elapsed_sec: float | None = None) -> None:
+            if stage_name not in state.completed_stages:
+                state.completed_stages.append(stage_name)
+            if elapsed_sec is not None:
+                state.stage_timings_seconds[stage_name] = elapsed_sec
+            state.stage_role_hashes[stage_name] = dict(new_hashes)
+            state.stage_models[stage_name] = {k: dict(v) for k, v in stage_snapshot.items()}
             state.save(out_path)
 
         def _should_skip(stage: str) -> bool:
@@ -238,9 +360,7 @@ class ForgePipeline:
                         index = HybridIndex.build(chunks, llm_client=None)
                 index.save(out_path / "index")
                 elapsed = round(time.perf_counter() - s_t0, 3)
-                state.completed_stages.append("ingest")
-                state.stage_timings_seconds["ingest"] = elapsed
-                state.save(out_path)
+                _mark_stage_done("ingest", elapsed)
                 self._emit("ingest", "done", elapsed)
 
             assert ingest_res is not None and profile is not None and index is not None
@@ -268,9 +388,7 @@ class ForgePipeline:
                     raw_req.model_dump_json(indent=2), encoding="utf-8"
                 )
                 elapsed = round(time.perf_counter() - s_t0, 3)
-                state.completed_stages.append("intake")
-                state.stage_timings_seconds["intake"] = elapsed
-                state.save(out_path)
+                _mark_stage_done("intake", elapsed)
                 self._emit("intake", "done", elapsed)
 
             assert raw_req is not None
@@ -291,9 +409,7 @@ class ForgePipeline:
                 verified_req, _ = guard.evaluate(raw_req, strict=strict)
                 verified_req.save(out_path)
                 elapsed = round(time.perf_counter() - s_t0, 3)
-                state.completed_stages.append("groundability")
-                state.stage_timings_seconds["groundability"] = elapsed
-                state.save(out_path)
+                _mark_stage_done("groundability", elapsed)
                 self._emit("groundability", "done", elapsed)
 
             assert verified_req is not None
@@ -322,9 +438,7 @@ class ForgePipeline:
                     definition.save_yaml(out_path / "definition.yaml")
                 definition.save_yaml(out_path / "initial_definition.yaml")
                 elapsed = round(time.perf_counter() - s_t0, 3)
-                state.completed_stages.append("generate")
-                state.stage_timings_seconds["generate"] = elapsed
-                state.save(out_path)
+                _mark_stage_done("generate", elapsed)
                 self._emit("generate", "done", elapsed)
 
             assert definition is not None
@@ -362,9 +476,7 @@ class ForgePipeline:
                     out_dir=out_path,
                 )
                 elapsed = round(time.perf_counter() - s_t0, 3)
-                state.completed_stages.append("evals")
-                state.stage_timings_seconds["evals"] = elapsed
-                state.save(out_path)
+                _mark_stage_done("evals", elapsed)
                 self._emit("evals", "done", elapsed)
 
             assert eval_set is not None
@@ -389,9 +501,7 @@ class ForgePipeline:
                     out_path=out_path / "judge_reliability.json",
                 )
                 elapsed = round(time.perf_counter() - s_t0, 3)
-                state.completed_stages.append("judge_selftest")
-                state.stage_timings_seconds["judge_selftest"] = elapsed
-                state.save(out_path)
+                _mark_stage_done("judge_selftest", elapsed)
                 self._emit("judge_selftest", "done", elapsed)
 
             # 7. OPTIMIZE
@@ -435,9 +545,7 @@ class ForgePipeline:
                 # Keep <out_dir>/definition.yaml pointing to the final best definition
                 best_def.save_yaml(out_path / "definition.yaml")
                 elapsed = round(time.perf_counter() - s_t0, 3)
-                state.completed_stages.append("optimize")
-                state.stage_timings_seconds["optimize"] = elapsed
-                state.save(out_path)
+                _mark_stage_done("optimize", elapsed)
                 self._emit("optimize", "done", elapsed)
 
             # 8. REPORT
@@ -447,9 +555,7 @@ class ForgePipeline:
             if "report" in hooks:
                 hooks["report"]()
             state.total_elapsed_seconds = round(time.perf_counter() - t_start, 3)
-            if "report" not in state.completed_stages:
-                state.completed_stages.append("report")
-            state.save(out_path)
+            _mark_stage_done("report")
             build_report(
                 out_path,
                 llm_client=self.llm_client,
@@ -493,6 +599,7 @@ def run_factory(
     strict: bool = False,
     fast: bool = False,
     resume: bool = False,
+    allow_model_change: bool = False,
     time_budget_min: float | None = None,
     bm25_only: bool = False,
     profile: str | None = None,
@@ -513,5 +620,6 @@ def run_factory(
         strict=strict,
         fast=fast,
         resume=resume,
+        allow_model_change=allow_model_change,
         time_budget_min=time_budget_min,
     )
