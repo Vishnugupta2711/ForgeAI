@@ -254,9 +254,12 @@ class Judge:
                 best_overlap_with_nums = overlap
                 best_quote = ev.splitlines()[0][:120] if ev.strip() else ""
 
-        if best_overlap_with_nums >= 0.72 and any_ev_has_nums:
+        support_thresh = self.config.judge.claim_support_threshold
+        unsupport_thresh = self.config.judge.claim_unsupport_threshold
+
+        if best_overlap_with_nums >= support_thresh and any_ev_has_nums:
             return "SUPPORTED", best_overlap_with_nums, best_quote
-        if best_overlap_any < 0.35 or not any_ev_has_nums:
+        if best_overlap_any < unsupport_thresh or not any_ev_has_nums:
             return "UNSUPPORTED", best_overlap_any, ""
         return "MIDDLE", best_overlap_with_nums, best_quote
 

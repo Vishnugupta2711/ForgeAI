@@ -69,6 +69,13 @@ class CacheConfig(BaseModel):
     dir: str = ".cache/llm"
 
 
+class JudgeConfig(BaseModel):
+    """Thresholds for deterministic-first judge claim verification."""
+
+    claim_support_threshold: float = Field(default=0.72, ge=0.0, le=1.0)
+    claim_unsupport_threshold: float = Field(default=0.35, ge=0.0, le=1.0)
+
+
 class ForgeConfig(BaseModel):
     """Top-level ForgeAI configuration loaded from forge.toml / profiles and env vars."""
 
@@ -78,6 +85,7 @@ class ForgeConfig(BaseModel):
     rate_limits: RateLimitsConfig = Field(default_factory=RateLimitsConfig)
     generation: GenerationConfig = Field(default_factory=GenerationConfig)
     budgets: BudgetsConfig = Field(default_factory=BudgetsConfig)
+    judge: JudgeConfig = Field(default_factory=JudgeConfig)
     cache: CacheConfig = Field(default_factory=CacheConfig)
 
     def provider_for_role(self, role: str) -> ProviderName:

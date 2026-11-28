@@ -986,10 +986,12 @@ def judge_selftest(
     report = _run_judge_selftest_pipeline(
         docs=docs, eval_set_path=eval_set, out_dir=out, profile=profile
     )
-    table = Table(title=f"Judge Self-Test Reliability ({report.judge_model})")
+    table = Table(title=f"Judge Self-Test Reliability — Standard Tier ({report.judge_model})")
     table.add_column("Canary Type", style="cyan")
     table.add_column("Expected")
     table.add_column("Total", justify="right")
+    table.add_column("Clean Pass", justify="right")
+    table.add_column("Fallback Pass", justify="right")
     table.add_column("False Pass Rate", justify="right")
     table.add_column("False Fail Rate", justify="right")
     for m in report.per_canary_type:
@@ -997,14 +999,40 @@ def judge_selftest(
             m.canary_type,
             "PASS" if m.expected_pass else "FAIL",
             str(m.total),
+            str(m.passed_cleanly),
+            str(m.passed_via_fallback),
             f"{m.false_pass_rate * 100:.1f}%",
             f"{m.false_fail_rate * 100:.1f}%",
         )
     console.print(table)
+    if report.hard_tier_per_canary_type:
+        hard_table = Table(
+            title=f"Judge Self-Test Reliability — HARD Tier ({report.judge_model})"
+        )
+        hard_table.add_column("Canary Type", style="magenta")
+        hard_table.add_column("Expected")
+        hard_table.add_column("Total", justify="right")
+        hard_table.add_column("Clean Pass", justify="right")
+        hard_table.add_column("Fallback Pass", justify="right")
+        hard_table.add_column("False Pass Rate", justify="right")
+        hard_table.add_column("False Fail Rate", justify="right")
+        for m in report.hard_tier_per_canary_type:
+            hard_table.add_row(
+                m.canary_type,
+                "PASS" if m.expected_pass else "FAIL",
+                str(m.total),
+                str(m.passed_cleanly),
+                str(m.passed_via_fallback),
+                f"{m.false_pass_rate * 100:.1f}%",
+                f"{m.false_fail_rate * 100:.1f}%",
+            )
+        console.print(hard_table)
     console.print(
         f"Saved -> {out / 'judge_reliability.json'} | "
-        f"Overall False Pass: {report.overall_false_pass_rate * 100:.1f}% | "
-        f"Overall False Fail: {report.overall_false_fail_rate * 100:.1f}%"
+        f"Standard False Pass: {report.overall_false_pass_rate * 100:.1f}% | "
+        f"Standard False Fail: {report.overall_false_fail_rate * 100:.1f}% | "
+        f"Hard False Pass: {report.hard_tier_false_pass_rate * 100:.1f}% | "
+        f"Hard False Fail: {report.hard_tier_false_fail_rate * 100:.1f}%"
     )
 
 
