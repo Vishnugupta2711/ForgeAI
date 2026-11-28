@@ -3,8 +3,8 @@
 
 [models]
 agent = "gemini-3.5-flash-lite"
-judge = "gemini-4-hydrogen"
-eval_writer = "gemini-4-hydrogen"
+judge = "gemini-3.1-flash-lite"
+eval_writer = "gemini-3.1-flash-lite"
 embed = "gemini-embedding-001"
 
 [endpoints]
@@ -18,17 +18,17 @@ seed = 42
 max_retries = 2
 
 [rate_limits]
-requests_per_minute = 10.0
+requests_per_minute = 14.0
 max_concurrency = 1
-max_http_retries = 4
+max_http_retries = 5
 backoff_seconds = 1.0
 
 [budgets]
 max_iterations = 3
 max_intake_questions = 5
-max_tokens_per_run = 500000
-max_calls_per_run = 300
-max_latency_seconds_per_run = 900.0
+max_tokens_per_run = 1000000
+max_calls_per_run = 1000
+max_latency_seconds_per_run = 3600.0
 min_improvement_delta = 0.02
 
 [cache]

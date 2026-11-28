@@ -57,7 +57,7 @@ def test_profile_selection_and_toml_strips_secret(
         == "https://generativelanguage.googleapis.com/v1beta/openai/"
     )
     assert gemini_cfg.models.agent == "gemini-3.5-flash-lite"
-    assert gemini_cfg.models.judge == "gemini-4-hydrogen"
+    assert gemini_cfg.models.judge == "gemini-3.1-flash-lite"
     assert gemini_cfg.models.embed == "gemini-embedding-001"
     assert "gemini_api_key" not in gemini_cfg.model_dump()["endpoints"]
     assert gemini_cfg.privacy_notice() is not None
