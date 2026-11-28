@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from forge import __version__
 from forge.agent.schema import AgentDefinition
 from forge.config import load_prompt
+from forge.evals.generator import model_family
 from forge.evals.models import EvalSet
 from forge.generator.synthesizer import GenerationLog
 from forge.intake.models import RequirementsDocument
@@ -49,6 +50,9 @@ def _read_usage_summary(usage_path: Path) -> dict[str, Any]:
             "completion_tokens": 0,
             "total_tokens": 0,
             "total_latency_ms": 0.0,
+            "actual_providers_by_role": {},
+            "actual_models_by_role": {},
+            "role_model_counts": {},
         }
     calls = 0
     cache_hits = 0
@@ -56,6 +60,11 @@ def _read_usage_summary(usage_path: Path) -> dict[str, Any]:
     completion_tokens = 0
     total_tokens = 0
     total_latency_ms = 0.0
+    actual_providers_ok: dict[str, list[str]] = {}
+    actual_models_ok: dict[str, list[str]] = {}
+    actual_providers_any: dict[str, list[str]] = {}
+    actual_models_any: dict[str, list[str]] = {}
+    role_model_counts: dict[str, dict[str, int]] = {}
     for line in usage_path.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
@@ -70,6 +79,33 @@ def _read_usage_summary(usage_path: Path) -> dict[str, Any]:
         completion_tokens += int(rec.get("completion_tokens") or 0)
         total_tokens += int(rec.get("total_tokens") or 0)
         total_latency_ms += float(rec.get("latency_ms") or 0.0)
+        role = str(rec.get("role") or "").strip()
+        prov = str(rec.get("provider") or "").strip()
+        model = str(rec.get("model") or "").strip()
+        status = str(rec.get("status") or "ok").strip()
+        if role:
+            if prov and prov not in actual_providers_any.setdefault(role, []):
+                actual_providers_any[role].append(prov)
+            if model and model not in actual_models_any.setdefault(role, []):
+                actual_models_any[role].append(model)
+            if status == "ok":
+                if prov and prov not in actual_providers_ok.setdefault(role, []):
+                    actual_providers_ok[role].append(prov)
+                if model and model not in actual_models_ok.setdefault(role, []):
+                    actual_models_ok[role].append(model)
+            label = f"{prov}/{model}".strip("/")
+            if label:
+                counts = role_model_counts.setdefault(role, {})
+                counts[label] = counts.get(label, 0) + 1
+
+    actual_providers = {
+        r: (actual_providers_ok.get(r) or actual_providers_any.get(r) or [])
+        for r in set(actual_providers_any) | set(actual_providers_ok)
+    }
+    actual_models = {
+        r: (actual_models_ok.get(r) or actual_models_any.get(r) or [])
+        for r in set(actual_models_any) | set(actual_models_ok)
+    }
     return {
         "calls": calls,
         "cache_hits": cache_hits,
@@ -77,6 +113,9 @@ def _read_usage_summary(usage_path: Path) -> dict[str, Any]:
         "completion_tokens": completion_tokens,
         "total_tokens": total_tokens,
         "total_latency_ms": round(total_latency_ms, 2),
+        "actual_providers_by_role": actual_providers,
+        "actual_models_by_role": actual_models,
+        "role_model_counts": role_model_counts,
     }
 
 
@@ -336,22 +375,53 @@ def build_report(
             lines.append(f"- {s_reason}")
         lines.append("")
 
-    # 1. Run Summary
+    # 1. Run Summary (providers/models grounded in usage.jsonl actuals first)
     profile_val = state.get("profile") or (
         definition.meta.provenance.profile if definition else "default"
     )
-    providers_map = (
+    fallback_providers = (
         state.get("providers")
         or (definition.meta.provenance.providers if definition else None)
         or ({"agent": definition.model.provider} if definition else {})
     )
-    providers_str = json.dumps(providers_map) if providers_map else "unknown"
-    models_map = (
-        (definition.meta.provenance.model_names if definition else None)
-        or state.get("models")
+    fallback_models = (
+        state.get("models")
+        or (definition.meta.provenance.model_names if definition else None)
         or {}
     )
+    # Prefer latest completed stage snapshot over stale initial state when usage.jsonl absent
+    stage_models_state = state.get("stage_models") or {}
+    if isinstance(stage_models_state, dict) and stage_models_state:
+        latest_stage_map = list(stage_models_state.values())[-1]
+        if isinstance(latest_stage_map, dict):
+            for role_k, entry in latest_stage_map.items():
+                if isinstance(entry, dict):
+                    if entry.get("provider"):
+                        fallback_providers = {**fallback_providers, role_k: entry["provider"]}
+                    if entry.get("model"):
+                        fallback_models = {**fallback_models, role_k: entry["model"]}
+
+    actual_provs_by_role = usage_data.get("actual_providers_by_role", {})
+    actual_mods_by_role = usage_data.get("actual_models_by_role", {})
+    providers_map: dict[str, str] = {}
+    models_map: dict[str, str] = {}
+    for role_k in ("agent", "judge", "eval_writer", "embed"):
+        provs = actual_provs_by_role.get(role_k) or []
+        mods = actual_mods_by_role.get(role_k) or []
+        if provs:
+            providers_map[role_k] = provs[0] if len(provs) == 1 else " -> ".join(provs)
+        elif role_k in fallback_providers:
+            providers_map[role_k] = str(fallback_providers[role_k])
+        if mods:
+            models_map[role_k] = mods[0] if len(mods) == 1 else " -> ".join(mods)
+        elif role_k in fallback_models:
+            models_map[role_k] = str(fallback_models[role_k])
+
+    providers_str = json.dumps(providers_map) if providers_map else "unknown"
     models_str = json.dumps(models_map) if models_map else "unknown"
+    provenance_src = (
+        "usage.jsonl actuals" if usage_data["calls"] > 0 else "checkpoint/definition metadata"
+    )
     seed_val = (
         eval_set.seed
         if eval_set
@@ -365,6 +435,7 @@ def build_report(
             f"- **Profile**: `{profile_val}`",
             f"- **Providers**: `{providers_str}`",
             f"- **Models**: `{models_str}`",
+            f"- **Model Provenance Source**: `{provenance_src}`",
             f"- **Seed**: `{seed_val}`",
             f"- **Fast Mode**: `{state.get('fast_mode', False)}`",
             f"- **Time Budget (min)**: `{state.get('time_budget_min', 'none')}` "
@@ -379,6 +450,13 @@ def build_report(
             ),
         ]
     )
+    if state.get("model_change_history"):
+        lines.append("- **Model Changes During Resume**:")
+        for change in state["model_change_history"]:
+            lines.append(
+                f"  - invalidated `{change.get('invalidated_stages', [])}`; "
+                f"changed roles: `{json.dumps(change.get('changed_roles', {}))}`"
+            )
     if state.get("time_budget_notes"):
         lines.append("- **Time Budget Degradation Notes**:")
         for note in state["time_budget_notes"]:
@@ -583,21 +661,63 @@ def build_report(
         lines.append("- Judge self-test reliability report not available.")
 
     active_sc = final_held or final_dev
-    if active_sc and active_sc.same_model_as_agent:
+    agent_model_eff = (
+        active_sc.agent_model
+        if active_sc
+        else (models_map.get("agent") or (definition.model.name if definition else ""))
+    )
+    judge_model_eff = (
+        active_sc.judge_model
+        if active_sc
+        else (models_map.get("judge") or (judge_rel.judge_model if judge_rel else ""))
+    )
+    agent_prov_eff = providers_map.get("agent") or (definition.model.provider if definition else "")
+    judge_prov_eff = providers_map.get("judge") or ""
+
+    same_model_eff = (
+        active_sc.same_model_as_agent
+        if active_sc
+        else bool(
+            agent_model_eff
+            and judge_model_eff
+            and agent_model_eff.strip().lower() == judge_model_eff.strip().lower()
+        )
+    )
+    same_family_eff = (
+        active_sc.same_family_as_agent
+        if active_sc
+        else bool(
+            agent_model_eff
+            and judge_model_eff
+            and model_family(agent_model_eff) == model_family(judge_model_eff)
+        )
+    )
+    same_provider_eff = bool(
+        agent_prov_eff
+        and judge_prov_eff
+        and agent_prov_eff.strip().lower() == judge_prov_eff.strip().lower()
+    )
+
+    if same_model_eff:
         lines.append(
             "- **⚠️ Same-Model Warning**: Agent and Judge use the exact same model "
-            f"(`{active_sc.agent_model}`), risking self-preference bias."
+            f"(`{agent_model_eff}`), risking self-preference bias."
         )
-    if active_sc and active_sc.same_family_as_agent:
+    if same_family_eff:
         lines.append(
             "- **⚠️ Same-Model-Family Warning**: Agent (`"
-            f"{active_sc.agent_model}`) and Judge (`{active_sc.judge_model}`) share the same "
+            f"{agent_model_eff}`) and Judge (`{judge_model_eff}`) share the same "
             "model family, which can introduce correlated bias."
         )
-    if active_sc and not (active_sc.same_model_as_agent or active_sc.same_family_as_agent):
+    if same_provider_eff:
         lines.append(
-            f"- **Model Separation Verified**: Agent (`{active_sc.agent_model}`) and Judge "
-            f"(`{active_sc.judge_model}`) use distinct model families."
+            "- **⚠️ Same-Provider Warning**: Agent and Judge both run on provider "
+            f"`{agent_prov_eff}` (shared vendor/runtime stack)."
+        )
+    if agent_model_eff and judge_model_eff and not (same_model_eff or same_family_eff):
+        lines.append(
+            f"- **Model Separation Verified**: Agent (`{agent_model_eff}`) and Judge "
+            f"(`{judge_model_eff}`) use distinct model families."
         )
     if active_sc and active_sc.length_pass_correlation is not None:
         lines.append(

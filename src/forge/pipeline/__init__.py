@@ -4,6 +4,7 @@ from forge.pipeline.runner import (
     STAGE_ORDER,
     ForgePipeline,
     PipelineExecutionError,
+    PipelineResumeError,
     PipelineState,
     run_factory,
 )
@@ -11,6 +12,7 @@ from forge.pipeline.runner import (
 __all__ = [
     "ForgePipeline",
     "PipelineExecutionError",
+    "PipelineResumeError",
     "PipelineState",
     "STAGE_ORDER",
     "run_factory",

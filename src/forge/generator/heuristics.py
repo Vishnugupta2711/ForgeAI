@@ -38,8 +38,8 @@ def derive_retrieval_settings(
     - rerank: enabled when doc_count >= 4 or top_k >= 5.
     - query_rewrite: enabled for multi-doc mixed-format corpora (doc_count >= 6
       or mixed tabular + prose with >= 4 docs).
-    - min_score: soft RRF floor (0.005) for larger corpora with >= 5 docs and
-      explicit refusal topics; None for small corpora.
+    - min_score: soft normalized score floor (0.25 on [0, 1] scale) for larger
+      corpora with >= 5 docs and explicit refusal topics; None for small corpora.
     """
     doc_count = max(1, profile.loaded_docs)
     total_chars = sum(doc.char_count for doc in profile.documents)
@@ -102,7 +102,7 @@ def derive_retrieval_settings(
     mixed_formats = 0.0 < tabular_share < 1.0
     query_rewrite = profile.loaded_docs >= 6 or (mixed_formats and profile.loaded_docs >= 4)
     min_score = (
-        0.005
+        0.25
         if (profile.loaded_docs >= 5 and len(requirements.must_refuse_topics) >= 2)
         else None
     )

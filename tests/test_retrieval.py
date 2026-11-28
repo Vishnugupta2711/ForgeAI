@@ -79,6 +79,11 @@ def test_alpha_min_score_and_query_rewrite_hook() -> None:
     assert rewritten_hits[0].metadata["effective_query"] == "salt-fog calibration Depot North"
     assert rewritten_hits[0].chunk.doc_id == "buoy_manual.txt"
 
-    # High min_score filters out all results
-    filtered = retriever_on.search("calibration", min_score=0.99)
+    # Normalized min_score=0.1 keeps relevant RRF-scored matches cleanly
+    kept_low_floor = retriever_on.search("calibration", min_score=0.1)
+    assert len(kept_low_floor) >= 1
+    assert retriever_on.score_scale()["scale"] == "normalized_0_to_1"
+
+    # High min_score filters out weaker / single-signal results (0.50 < 0.99)
+    filtered = retriever_on.search("unmatched_zxcv", query_rewrite=False, min_score=0.99)
     assert filtered == []

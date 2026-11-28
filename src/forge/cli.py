@@ -25,7 +25,7 @@ from forge.judge import EvalScorecard, Judge, JudgeReliabilityReport, run_judge_
 from forge.llm.client import LLMClient
 from forge.llm.models import LLMProviderError
 from forge.optimizer import OptimizationScorecard, OptimizerLoop
-from forge.pipeline import ForgePipeline, PipelineExecutionError, PipelineState
+from forge.pipeline import ForgePipeline, PipelineExecutionError, PipelineResumeError, PipelineState
 from forge.retrieval.hybrid import HybridIndex, HybridRetriever
 from forge.retrieval.models import RetrievalConfig
 from forge.tools import ToolContext
@@ -1114,8 +1114,9 @@ def _run_full_pipeline_cli(
     strict: bool,
     fast: bool,
     resume: bool,
-    time_budget_min: float | None,
-    bm25_only: bool,
+    allow_model_change: bool = False,
+    time_budget_min: float | None = None,
+    bm25_only: bool = False,
     profile: str | None = None,
     llm_client: LLMClient | None = None,
 ) -> PipelineState:
@@ -1143,6 +1144,7 @@ def _run_full_pipeline_cli(
         strict=strict,
         fast=fast,
         resume=resume,
+        allow_model_change=allow_model_change,
         time_budget_min=time_budget_min,
     )
 
@@ -1185,6 +1187,16 @@ def run(
         bool,
         typer.Option("--resume", help="Resume from completed stage checkpoints in --out."),
     ] = False,
+    allow_model_change: Annotated[
+        bool,
+        typer.Option(
+            "--allow-model-change",
+            help=(
+                "Allow --resume when model/provider config changed by "
+                "invalidating downstream stages."
+            ),
+        ),
+    ] = False,
     time_budget_min: Annotated[
         float | None,
         typer.Option(
@@ -1225,10 +1237,16 @@ def run(
             strict=strict,
             fast=fast,
             resume=resume,
+            allow_model_change=allow_model_change,
             time_budget_min=time_budget_min,
             bm25_only=bm25_only,
             profile=profile,
         )
+    except PipelineResumeError as exc:
+        console.print(
+            Panel(str(exc), title="Resume Refused (Model Config Changed)", border_style="red")
+        )
+        raise typer.Exit(code=1) from exc
     except LLMProviderError as exc:
         console.print(Panel(str(exc), title="LLM Provider Error", border_style="red"))
         raise typer.Exit(code=1) from exc

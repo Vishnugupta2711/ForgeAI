@@ -713,6 +713,14 @@ class EvalGenerator:
 
         eval_writer_m = self._eval_model()
         agent_m = definition.model.name
+        prompt_files = (
+            "evalgen_single_doc.v1.md",
+            "evalgen_multi_doc.v1.md",
+            "evalgen_out_of_scope.v1.md",
+            "evalgen_edge_cases.v1.md",
+            "evalgen_tool_cases.v1.md",
+        )
+        prompt_hashes = {pf: _prompt_hash(pf) for pf in prompt_files}
         eval_set = EvalSet(
             agent_name=definition.meta.name,
             eval_writer_model=eval_writer_m,
@@ -728,6 +736,12 @@ class EvalGenerator:
             held_out_category_counts=_count_by_cat(held_out_cases),
             rejected_counts_by_reason=rej_counts,
             scaled_quotas_note=scaled_note,
+            provenance={
+                "eval_writer_model": eval_writer_m,
+                "agent_model": agent_m,
+                "seed": resolved_seed,
+                "prompt_hashes": prompt_hashes,
+            },
         )
 
         if out_dir is not None:

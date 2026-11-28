@@ -19,7 +19,13 @@ from forge.optimizer.models import (
     PromptSectionName,
     RetrievalPatch,
 )
-from forge.optimizer.patches import ALLOWED_RETRIEVAL_FIELDS, apply_patch, apply_patches
+from forge.optimizer.patches import (
+    ALLOWED_RETRIEVAL_FIELDS,
+    apply_patch,
+    apply_patches,
+    validate_patch_operator_mapping,
+    validate_retrieval_patch_scale,
+)
 
 __all__ = [
     "ALLOWED_RETRIEVAL_FIELDS",
@@ -40,5 +46,7 @@ __all__ = [
     "classify_failure",
     "classify_failures",
     "filter_leaking_patches",
+    "validate_patch_operator_mapping",
+    "validate_retrieval_patch_scale",
     "verify_diff_guard",
 ]

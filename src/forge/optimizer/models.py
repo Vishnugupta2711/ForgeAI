@@ -81,6 +81,7 @@ class IterationRecord(BaseModel):
     failure_counts: dict[str, int] = Field(default_factory=dict)
     proposed_patches: list[OptimizerPatch] = Field(default_factory=list)
     rejected_by_leak_guard: list[str] = Field(default_factory=list)
+    rejected_precheck: list[str] = Field(default_factory=list)
     accepted: bool = False
     rolled_back: bool = False
     decision_reason: str = ""

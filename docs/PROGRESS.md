@@ -136,3 +136,15 @@
   - Registered `live` pytest marker in `pyproject.toml` and added mocked/security/`@pytest.mark.live` tests in `tests/test_gemini_provider.py` + updated `README.md` ("Using Gemini")
 - **Verification**:
   - `pytest -q` and `ruff check .` passed cleanly.
+
+### Phase 9b — Retrieval Scale, Optimizer Guards, Matcher & Resume Safety (`phase-9b-guards`)
+- **Status**: Complete
+- **Deliverables**:
+  - Normalized `min_score` (`[0.0, 1.0]`) onto `HybridRetriever.score_scale()` / `normalize_score()` (`raw_score_max = 1 / (rrf_k + 1)`), applied the identical normalized gate in `AgentRuntime._retrieve()`, and validated/clamped `RetrievalPatch.min_score` at proposal time
+  - Added cheap 3–5 query retrieval-only & contract schema precheck gate (`_precheck_candidate`, `IterationRecord.rejected_precheck`) skipping full dev eval on destructive patches and retrying one alternative fallback operator in the same iteration
+  - Enforced strict failure-category -> operator mapping (`validate_patch_operator_mapping`: `RetrievalPatch` restricted to `retrieval_miss`; `prompt_defect`/`contract_failure` -> `PromptPatch`; `hallucination` -> `grounding_rules`)
+  - Normalized snake-case underscores and common abbreviations (`moq`, `min`, `max`, `qty`, `pct`, `avg`, `std`, `est`, `approx`) in `canonicalize_text()` while keeping numeric mismatch guards intact
+  - Added per-stage role provider/model config hashes in `PipelineState` (`role_hashes`, `stage_role_hashes`, `stage_models`), refusing `--resume` by default on model changes with `PipelineResumeError` and supporting `--allow-model-change` invalidation + downstream re-execution
+  - Built `report.md` Section 1 headers from `usage.jsonl` actuals (with `model_change_history` and Section 7 same-provider/same-family warnings) and added top-level + verified per-case `provenance` on `EvalSet`
+- **Verification**:
+  - `pytest -q`, `ruff check .`, domain isolation grep, and repo secret scan all passed cleanly (`tests/test_phase9b_guards.py`).

@@ -10,7 +10,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from forge.agent.runtime import AgentRuntime
-from forge.agent.schema import AgentDefinition
+from forge.agent.schema import AgentDefinition, AgentOutput
 from forge.config import ForgeConfig, load_prompt
 from forge.evals.models import EvalCase, EvalSet
 from forge.ingest import ingest_folder
@@ -29,8 +29,9 @@ from forge.optimizer.models import (
     PromptPatch,
     RetrievalPatch,
 )
-from forge.optimizer.patches import apply_patches
-from forge.retrieval.hybrid import HybridIndex
+from forge.optimizer.patches import apply_patches, validate_patch_operator_mapping
+from forge.retrieval.hybrid import HybridIndex, HybridRetriever
+from forge.retrieval.models import RetrievalConfig
 from forge.tools import ToolContext
 
 
@@ -112,6 +113,11 @@ def _render_iteration_log(record: IterationRecord, failures_before: list[Classif
         for msg in record.rejected_by_leak_guard:
             lines.append(f"- {msg}")
 
+    if record.rejected_precheck:
+        lines.extend(["", "## Precheck Rejections"])
+        for msg in record.rejected_precheck:
+            lines.append(f"- {msg}")
+
     lines.extend(["", "## Failure Case Details"])
     for f in failures_before:
         lines.append(
@@ -139,6 +145,28 @@ class OptimizerLoop:
         self.max_iterations = min(3, max(1, max_iterations))
         self.category_regression_tolerance = category_regression_tolerance
         self.bm25_only = bm25_only
+
+    def _prepare_candidate(
+        self,
+        base_def: AgentDefinition,
+        patches_to_apply: list[OptimizerPatch],
+        docs_path: Path,
+        documents: list[Document],
+        best_index: HybridIndex,
+        best_chunk_map: dict[str, Chunk],
+    ) -> tuple[AgentDefinition, list[Document], HybridIndex, dict[str, Chunk]]:
+        c_def = apply_patches(base_def, patches_to_apply)
+        verify_diff_guard(base_def, c_def, patches_to_apply)
+        if any(
+            isinstance(p, RetrievalPatch) and p.triggers_reindex
+            for p in patches_to_apply
+        ):
+            c_docs, c_chunks, c_idx = _build_index_for_definition(
+                docs_path, c_def, self.llm_client, bm25_only=self.bm25_only
+            )
+            c_map = {c.chunk_id: c for c in c_chunks}
+            return c_def, c_docs, c_idx, c_map
+        return c_def, documents, best_index, best_chunk_map
 
     def _eval_split(
         self,
@@ -240,6 +268,17 @@ class OptimizerLoop:
                         addressed_case_ids=case_ids,
                         rationale="Ensure retrieved facts are reflected completely in answers.",
                     )
+                elif "prompt:extra_rules:add_rule" not in rejected_sigs:
+                    candidate = PromptPatch(
+                        section="extra_rules",
+                        op="add_rule",
+                        text=(
+                            "Synthesize every required numeric and policy fact explicitly "
+                            "before finalizing the JSON response."
+                        ),
+                        addressed_case_ids=case_ids,
+                        rationale="Alternative prompt operator when format_rules is exhausted.",
+                    )
 
             if candidate is not None and _patch_signature(candidate) not in rejected_sigs:
                 patches.append(candidate)
@@ -261,7 +300,17 @@ class OptimizerLoop:
                 f"- {f.case_id} ({f.failure_category}/{f.subtype}): {f.evidence}"
             )
 
+        score_scale = HybridRetriever(
+            HybridIndex([]),
+            config=RetrievalConfig(
+                alpha=definition.retrieval.hybrid_alpha,
+                top_k=definition.retrieval.top_k,
+                min_score=definition.retrieval.min_score,
+            ),
+        ).score_scale()
+
         prompt = load_prompt("optimizer_propose_patches.v1.md").format(
+            score_scale_json=json.dumps(score_scale, indent=2),
             retrieval_json=json.dumps(definition.retrieval.model_dump(), indent=2),
             system_prompt_json=json.dumps(definition.system_prompt.model_dump(), indent=2),
             failure_summary="\n".join(summary_lines),
@@ -277,15 +326,105 @@ class OptimizerLoop:
                 temperature=0.0,
                 max_repairs=2,
             )
-            proposed = [
+            raw_candidates = [
                 p for p in res.patches[:2] if _patch_signature(p) not in rejected_sigs
             ]
+            proposed, mapping_rejections = validate_patch_operator_mapping(
+                raw_candidates, failures, score_scale=score_scale
+            )
+            if mapping_rejections:
+                for cand in raw_candidates:
+                    if cand not in proposed:
+                        rejected_sigs.add(_patch_signature(cand))
         except Exception:
             proposed = []
 
         if not proposed:
-            proposed = self._fallback_patches(failures, definition, rejected_sigs)
+            raw_fallback = self._fallback_patches(failures, definition, rejected_sigs)
+            proposed, _ = validate_patch_operator_mapping(
+                raw_fallback, failures, score_scale=score_scale
+            )
         return proposed[:2]
+
+    def _precheck_candidate(
+        self,
+        candidate_def: AgentDefinition,
+        patches: list[OptimizerPatch],
+        dev_cases: list[EvalCase],
+        cand_index: HybridIndex,
+        cand_docs: list[Document],
+    ) -> tuple[bool, str | None]:
+        """Cheap pre-eval sample (3-5 dev questions, 0 judge calls) blocking bad patches."""
+        answerable = [c for c in dev_cases if c.expected_behavior != "refuse"]
+        if not answerable:
+            return True, None
+
+        addressed_ids: list[str] = []
+        for p in patches:
+            addressed_ids.extend(p.addressed_case_ids)
+        addressed_set = set(addressed_ids)
+        prioritized = [c for c in answerable if c.id in addressed_set] + [
+            c for c in answerable if c.id not in addressed_set
+        ]
+        sample_size = min(5, len(prioritized))
+        if sample_size > 3:
+            sample = prioritized[:sample_size]
+        else:
+            sample = prioritized[: min(len(prioritized), 3)]
+
+        # 1. Retrieval-only check (no LLM judge or agent chat calls)
+        use_dense = (
+            (not self.bm25_only)
+            and cand_index.embeddings is not None
+            and candidate_def.retrieval.hybrid_alpha > 0.0
+        )
+        retriever = HybridRetriever(
+            cand_index,
+            llm_client=self.llm_client if use_dense else None,
+            config=RetrievalConfig(
+                alpha=candidate_def.retrieval.hybrid_alpha if use_dense else 0.0,
+                top_k=candidate_def.retrieval.top_k,
+                min_score=candidate_def.retrieval.min_score,
+                query_rewrite=False,
+            ),
+        )
+        empty_hits = sum(1 for c in sample if not retriever.search(c.question))
+        if empty_hits > (len(sample) / 2.0):
+            return False, (
+                f"rejected_precheck: retrieval emptied for {empty_hits}/{len(sample)} "
+                f"sampled dev questions (min_score={candidate_def.retrieval.min_score})."
+            )
+
+        # 2. Structural schema validity + cheap agent-only schema probe for PromptPatch
+        try:
+            AgentOutput(
+                answer="ok",
+                citations=[],
+                refused=True,
+                refusal_reason="probe",
+                confidence=0.5,
+            )
+        except Exception as exc:
+            return False, f"rejected_precheck: output contract schema invalid ({exc})."
+
+        if any(isinstance(p, PromptPatch) for p in patches):
+            probe = sample[: min(3, len(sample))]
+            tool_ctx = ToolContext.from_documents(cand_docs, offline_only=True)
+            runtime = AgentRuntime(
+                candidate_def,
+                cand_index,
+                llm_client=self.llm_client,
+                tool_context=tool_ctx,
+                config=self.config,
+            )
+            schema_fails = sum(1 for c in probe if runtime.answer(c.question).contract_failed)
+            if schema_fails > (len(probe) / 2.0):
+                return False, (
+                    f"rejected_precheck: contract schema validation failed on "
+                    f"{schema_fails}/{len(probe)} sampled dev questions."
+                )
+
+        return True, None
 
     def run(
         self,
@@ -404,19 +543,88 @@ class OptimizerLoop:
                     break
                 continue
 
-            candidate_def = apply_patches(best_def, clean_patches)
-            verify_diff_guard(best_def, candidate_def, clean_patches)
-
-            needs_reindex = any(
-                isinstance(p, RetrievalPatch) and p.triggers_reindex for p in clean_patches
+            candidate_def, cand_docs, cand_index, cand_chunk_map = self._prepare_candidate(
+                best_def, clean_patches, docs_path, documents, best_index, best_chunk_map
             )
-            if needs_reindex:
-                cand_docs, cand_chunks, cand_index = _build_index_for_definition(
-                    docs_path, candidate_def, self.llm_client, bm25_only=self.bm25_only
+            precheck_rejections: list[str] = []
+            pre_ok, pre_reason = self._precheck_candidate(
+                candidate_def, clean_patches, eval_set.dev_cases, cand_index, cand_docs
+            )
+            if not pre_ok:
+                precheck_rejections.append(pre_reason or "rejected_precheck")
+                for p in clean_patches:
+                    rejected_sigs.add(_patch_signature(p))
+
+                # Try one alternative operator in this iteration (skip full eval on bad patch)
+                alt_scale = HybridRetriever(
+                    HybridIndex([]),
+                    config=RetrievalConfig(
+                        alpha=best_def.retrieval.hybrid_alpha,
+                        top_k=best_def.retrieval.top_k,
+                        min_score=best_def.retrieval.min_score,
+                    ),
+                ).score_scale()
+                alt_raw = self._fallback_patches(failures, best_def, rejected_sigs)
+                alt_mapped, _ = validate_patch_operator_mapping(
+                    alt_raw, failures, score_scale=alt_scale
                 )
-                cand_chunk_map = {c.chunk_id: c for c in cand_chunks}
-            else:
-                cand_docs, cand_index, cand_chunk_map = documents, best_index, best_chunk_map
+                alt_clean, alt_leaks = filter_leaking_patches(
+                    alt_mapped, eval_set.dev_cases, eval_set.held_out_cases
+                )
+                leak_rejections.extend(alt_leaks)
+                alt_ready = False
+                if alt_clean:
+                    candidate_def, cand_docs, cand_index, cand_chunk_map = (
+                        self._prepare_candidate(
+                            best_def, alt_clean, docs_path, documents, best_index, best_chunk_map
+                        )
+                    )
+                    alt_ok, alt_reason = self._precheck_candidate(
+                        candidate_def, alt_clean, eval_set.dev_cases, cand_index, cand_docs
+                    )
+                    if alt_ok:
+                        clean_patches = alt_clean
+                        alt_ready = True
+                    else:
+                        precheck_rejections.append(alt_reason or "rejected_precheck")
+                        for p in alt_clean:
+                            rejected_sigs.add(_patch_signature(p))
+
+                if not alt_ready:
+                    rec = IterationRecord(
+                        iteration=iter_idx,
+                        score_before=score_before,
+                        score_after=score_before,
+                        category_scores_before=cats_before,
+                        category_scores_after=cats_before,
+                        failure_counts=failure_counts,
+                        proposed_patches=clean_patches,
+                        rejected_by_leak_guard=leak_rejections,
+                        rejected_precheck=precheck_rejections,
+                        accepted=False,
+                        rolled_back=True,
+                        decision_reason="; ".join(precheck_rejections),
+                    )
+                    iterations.append(rec)
+                    best_def.save_yaml(iter_dir / "definition.yaml")
+                    (iter_dir / "results.json").write_text(
+                        current_dev_scorecard.model_dump_json(indent=2), encoding="utf-8"
+                    )
+                    (iter_dir / "failures.json").write_text(
+                        json.dumps([f.model_dump() for f in failures], indent=2),
+                        encoding="utf-8",
+                    )
+                    (iter_dir / "patch.json").write_text(
+                        rec.model_dump_json(indent=2), encoding="utf-8"
+                    )
+                    (iter_dir / "log.md").write_text(
+                        _render_iteration_log(rec, failures), encoding="utf-8"
+                    )
+                    consecutive_no_improve += 1
+                    if consecutive_no_improve >= 2:
+                        stop_reason = "early_stop_two_consecutive_no_improvement"
+                        break
+                    continue
 
             cand_scorecard = self._eval_split(
                 candidate_def,
@@ -477,6 +685,7 @@ class OptimizerLoop:
                 failure_counts=failure_counts,
                 proposed_patches=clean_patches,
                 rejected_by_leak_guard=leak_rejections,
+                rejected_precheck=precheck_rejections,
                 accepted=accepted,
                 rolled_back=rolled_back,
                 decision_reason=decision_reason,
