@@ -148,3 +148,10 @@
   - Built `report.md` Section 1 headers from `usage.jsonl` actuals (with `model_change_history` and Section 7 same-provider/same-family warnings) and added top-level + verified per-case `provenance` on `EvalSet`
 - **Verification**:
   - `pytest -q`, `ruff check .`, domain isolation grep, and repo secret scan all passed cleanly (`tests/test_phase9b_guards.py`).
+
+### Phase 9c — CSV Key-Fact Matcher Regression Guard (`phase-9c-regression-test`)
+- **Status**: Complete
+- **Deliverables**:
+  - Added `test_real_ship_spares_kv_matcher_regression_both_directions` in `tests/test_phase9b_guards.py` locking in real `DEV-014`, `DEV-016`, `DEV-019`, and `DEV-020` answers vs. numeric corruptions (`10->12`, `4->5`, `2->3`)
+- **Verification**:
+  - `pytest -q`, `ruff check .`, judge canary self-test, domain isolation grep, and repo secret scan passed cleanly.

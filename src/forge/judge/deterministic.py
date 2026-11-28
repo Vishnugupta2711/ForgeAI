@@ -13,7 +13,9 @@ from forge.evals.models import ExpectedBehavior
 from forge.ingest.models import Chunk
 
 _WHITESPACE_RE = re.compile(r"\s+")
-_NUMBER_RE = re.compile(r"(?<![a-zA-Z0-9_])(\d+(?:,\d{3})*(?:\.\d+)?)(?![a-zA-Z0-9_])")
+_NUMBER_RE = re.compile(
+    r"(?<![a-zA-Z0-9_])(?<![a-zA-Z]-)(\d+(?:,\d{3})*(?:\.\d+)?)(?![a-zA-Z0-9_])"
+)
 _CURRENCY_PREFIX_RE = re.compile(r"([$€£])\s*(\d+(?:,\d{3})*(?:\.\d+)?)")
 _ISO_DATE_RE = re.compile(r"\b(\d{4})-(\d{1,2})-(\d{1,2})\b")
 _SLASH_DATE_RE = re.compile(r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b")

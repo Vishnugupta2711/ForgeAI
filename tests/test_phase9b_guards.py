@@ -15,7 +15,7 @@ from forge.cli import app
 from forge.config import ForgeConfig, load_prompt
 from forge.evals import EvalCase, EvalGenerator, EvalProvenance, EvalSet, EvalSourceRef
 from forge.ingest import ingest_folder
-from forge.judge.deterministic import match_key_fact
+from forge.judge.deterministic import compute_key_fact_recall, match_key_fact
 from forge.llm import FakeLLM, LLMMessage
 from forge.optimizer import (
     ClassifiedFailure,
@@ -463,6 +463,76 @@ def test_matcher_normalizes_kv_abbreviations_while_rejecting_wrong_numbers() -> 
         "The minimum order quantity required for the Zinc Anode Block MK-5 is 12 units.",
     )
     assert not match_key_fact("unit_price_usd: 67.00", "The unit price is $76 per piece.")
+
+
+def test_real_ship_spares_kv_matcher_regression_both_directions() -> None:
+    """Exact DEV-014/016/019/020 cases: real answers pass; altered numbers fail."""
+    cases = [
+        (
+            "DEV-014",
+            "min_order_qty: 10",
+            (
+                "The minimum order quantity required for the "
+                "Anti-Corrosion Zinc Anode Block MK-5 is 10 units."
+            ),
+            (
+                "The minimum order quantity required for the "
+                "Anti-Corrosion Zinc Anode Block MK-5 is 12 units."
+            ),
+        ),
+        (
+            "DEV-016",
+            "min_order_qty: 4",
+            (
+                "The minimum order quantity required for the Boiler Burner Igniter "
+                "Assembly MK-4 is 4 units across all available supplier listings "
+                "in the catalogue."
+            ),
+            (
+                "The minimum order quantity required for the Boiler Burner Igniter "
+                "Assembly MK-4 is 5 units across all available supplier listings "
+                "in the catalogue."
+            ),
+        ),
+        (
+            "DEV-019",
+            "min_order_qty: 2",
+            (
+                "The minimum order quantity required for the Refrigerant R404A Service "
+                "Cylinder MK-2 is 2 units across all listed suppliers and part numbers "
+                "in the catalogue."
+            ),
+            (
+                "The minimum order quantity required for the Refrigerant R404A Service "
+                "Cylinder MK-2 is 3 units across all listed suppliers and part numbers "
+                "in the catalogue."
+            ),
+        ),
+        (
+            "DEV-020",
+            "min_order_qty: 2",
+            (
+                "The minimum order quantity required for the Main Engine Fuel Injector "
+                "MK-2 is 2 units across all listed suppliers and locations in the "
+                "spares catalogue."
+            ),
+            (
+                "The minimum order quantity required for the Main Engine Fuel Injector "
+                "MK-2 is 3 units across all listed suppliers and locations in the "
+                "spares catalogue."
+            ),
+        ),
+    ]
+    for cid, key_fact, real_answer, corrupted_answer in cases:
+        assert match_key_fact(key_fact, real_answer), f"{cid} real answer failed"
+        recall_ok, _, _ = compute_key_fact_recall([key_fact], real_answer)
+        assert recall_ok == 1.0, f"{cid} recall expected 1.0"
+
+        assert not match_key_fact(key_fact, corrupted_answer), (
+            f"{cid} corrupted number unexpectedly matched"
+        )
+        recall_bad, _, _ = compute_key_fact_recall([key_fact], corrupted_answer)
+        assert recall_bad == 0.0, f"{cid} corrupted recall expected 0.0"
 
 
 # ---------------------------------------------------------------------------
