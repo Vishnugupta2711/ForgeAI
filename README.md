@@ -121,9 +121,22 @@ forge optimize --run runs/tmp
   - *Position bias*: two-pass forward vs. shuffled verification; disagreement marks `uncertain=True` and falls back to deterministic checks.
   - *Self-preference*: distinct judge model family enforced/checked and warned when equal.
   - *Verbosity bias*: atomic claim-level binary scoring plus Pearson correlation between answer length and pass rate.
-  - *Judge canary self-test*: `forge judge-selftest` measures false-pass and false-fail rates across 8 canary types (`judge_reliability.json`).
+  - *Judge canary self-test*: `forge judge-selftest` measures false-pass and false-fail rates across 8 standard and 5 HARD-tier canary types (`judge_reliability.json`).
 - **Targeted Optimizer with Guards**: Only touches `dev` cases during iterations; scores `held_out` strictly at baseline and end. Applies typed `RetrievalPatch` / `PromptPatch` deltas checked by a byte-level **diff guard**, an n-gram **leak guard**, and category-regression **rollback**.
 - **Honest Reporting & Suspicion Rule**: `report.md` inserts all metrics by code from result files, lints LLM diagnosis narratives against result numbers, reports Wilson 95% intervals for small sample sizes, and flags 100% pass rates or large dev/held-out gaps as suspicious.
+
+## Judge validation: what the self-test does and doesn't show
+
+`forge judge-selftest` evaluates the configured judge (`llama3.1:8b` by default) on two separately reported synthetic tiers inside `judge_reliability.json`:
+
+- **Standard tier (`16` canaries, 8 types)**: `gold_answer`, `terse_correct`, `padded_verbose`, `correct_refusal`, `numerically_corrupted`, `hallucinated_claim`, `wrong_document`, and `wrongful_refusal`. If live standard-tier `false_fail > 25%` or `false_pass > 0%`, `build_report()` inserts a top-of-report warning that scores are unreliable lower bounds and blocks narrative pass-rate interpretation.
+- **HARD tier (`10` canaries, 5 types)**: `paraphrased_correct`, `correct_with_hedging`, `partial_correct_two_facts`, `subtle_hallucination`, and `wrong_entity_same_shape`. Clean passes (`passed_cleanly`) and fallback passes (`passed_via_fallback`) are tracked separately on both tiers.
+
+What this validation **does not** guarantee:
+
+- **Shared documents, eval set, and thresholds**: Both tiers are constructed deterministically from the exact same `EvalSet` and `chunk_map` the generated agent is tested on, and share the `[judge]` thresholds in [forge.toml](forge.toml) (`claim_support_threshold = 0.72`, `claim_unsupport_threshold = 0.35`), deterministic CSV field-level matching, and the missing-fact quote/number gate (`key_fact_recall < 1.0` blocks bare `correct=True` unless every missing fact is backed by an answer substring quote with exact matching numbers). They do not measure generalization to unseen user question distributions or external corpora.
+- **High-overlap masking of LLM fragility**: Many `paraphrased_correct` and `correct_with_hedging` sentences keep enough surface tokens (`>= 0.72`) to clear deterministically without exercising the middle-band LLM claim verifier, while `subtle_hallucination` cases are caught deterministically by ungrounded numbers (`19`) or `< 0.35` token overlap rather than subtle semantic contradictions that preserve all chunk words and numbers.
+- **Corpus-dependent behavior and observed failures**: Results differ across corpora (prose PDFs vs. mixed PDF + tabular CSV). In our `Phase 9d-1b` benchmark before adding the correctness quote gate and tabular CSV claim matcher, `hr_policy` scored `0.0%` HARD-tier false-pass/false-fail whereas `ship_spares` exposed **`33.3%` HARD-tier false-pass** (`HARD-PARTIAL-1` and `HARD-PARTIAL-2`, where `key_fact_recall = 0.5` missed `lead_time_days: 7` / `lead_time_days: 5` and `llama3.1:8b` still returned bare `correct=True` on both shuffled passes) and **`25.0%` HARD-tier false-fail** (`HARD-PARA-1`, where `'In addition, base lead time days: 7.'` dropped below `0.72` overlap and `llama3.1:8b` rejected it citing column-syntax wording). On `Phase 9d-1c`, both `hr_policy` and `ship_spares` achieved **`0.0%` false-pass and `0.0%` false-fail** across both Standard (`8/8` positive clean, `0` fallback) and HARD (`4/4` positive clean, `0` fallback) tiers, leaving zero canary false-fails/false-passes on those suites while noting that real agent paraphrases falling into the prose middle band still depend on `llama3.1:8b` claim verification.
 
 ## Honest Limitations
 
